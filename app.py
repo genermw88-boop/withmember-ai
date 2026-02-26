@@ -13,7 +13,7 @@ MY_API_KEY = "여기에_대표님의_API_키를_붙여넣으세요"
 
 # API 클라이언트 및 모델 세팅 (자동 적용)
 try:
-    client = genai.Client(api_key="AIzaSyCENYrzmq53WLKH8llf_bKtXgK1ilhFqNk")
+    client = genai.Client(api_key=st.secrets["MY_API_KEY"])
 except Exception as e:
     st.error("API 키가 올바르지 않습니다. 코드 안에 API 키를 정확히 넣었는지 확인해 주세요!")
     st.stop()
@@ -92,4 +92,5 @@ with tab2:
                 except Exception as e:
                     st.error(f"오류가 발생했습니다. API 키나 인터넷 연결을 확인해 주세요. ({e})")
         else:
+
             st.warning("날씨, 요일, 키워드를 모두 채워주세요.")
