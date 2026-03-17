@@ -17,7 +17,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 3. [공백 완벽 제거] 황금키워드 추출 로직 ---
+# --- 3. [완벽 개선] 스마트 단어 추출 로직 ---
 def get_naver_golden_keywords(reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -31,27 +31,27 @@ def get_naver_golden_keywords(reg, men, c_id, a_key, s_key):
         'X-Signature': signature
     }
     
-    # [핵심 수정] 띄어쓰기를 원천적으로 모두 제거합니다. (예: "광주 월계동" -> "광주월계동")
-    clean_reg = reg.replace(" ", "")
-    clean_men = men.replace(" ", "")
+    # [핵심 1] 띄어쓰기 기준으로 가장 마지막 단어만 지역명으로 추출 (예: "광주 동구 동명동" -> "동명동")
+    reg_parts = reg.strip().split()
+    core_reg = reg_parts[-1] if reg_parts else reg.strip()
     
-    # 동/역/구/시 제거하여 핵심 지역명 추출 (예: "광주월계동" -> "광주월계")
-    core_reg = clean_reg.replace("동", "").replace("역", "").replace("구", "").replace("시", "")
-    if len(core_reg) < 2: core_reg = clean_reg[:2] # 만약 한 글자만 남으면 방어
+    # 필터링을 위한 짧은 지역명 (예: "동명동" -> "동명", "야탑동" -> "야탑")
+    # 단, "장동"처럼 2글자인 경우는 그대로 유지
+    short_reg = core_reg[:-1] if len(core_reg) >= 3 and core_reg[-1] in ['동', '역', '구', '시'] else core_reg
 
-    # 네이버에 던질 5가지 힌트 키워드 세팅
-    hints = f"{core_reg}맛집,{core_reg}{clean_men},{core_reg}회식,{core_reg}모임,{core_reg}데이트"
+    # [핵심 2] 메뉴에 콤마가 있으면 무조건 첫 번째 단어만 사용 (예: "카츠, 사시미" -> "카츠")
+    core_men = men.replace(",", " ").split()[0] if men else ""
     
-    # 만약의 사태를 대비해 최종 힌트에서도 공백 완벽 제거
-    safe_hints = hints.replace(" ", "")
-    params = {'hintKeywords': safe_hints, 'showDetail': 1}
+    # 네이버에 던질 5가지 힌트 (이제 콤마 오류나 정체불명 지역명 오류가 없습니다)
+    hints = f"{core_reg}맛집,{core_reg}{core_men},{short_reg}회식,{short_reg}모임,{short_reg}데이트"
+    params = {'hintKeywords': hints, 'showDetail': 1}
     
     try:
         res = requests.get(f'https://api.naver.com{uri}', params=params, headers=headers)
         
         if res.status_code == 200:
             data = res.json().get('keywordList', [])
-            if not data: return [], "키워드 데이터가 부족합니다. 다른 키워드로 시도해보세요."
+            if not data: return [], f"'{core_reg}' 주변의 키워드 검색량이 부족합니다. 지역명을 조금 다르게 적어주세요."
             
             filtered_data = []
             for item in data:
@@ -60,17 +60,17 @@ def get_naver_golden_keywords(reg, men, c_id, a_key, s_key):
                 # 타지역 및 불필요한 단어 제거
                 if "주변" in kw or "근처" in kw or "오늘" in kw: continue
                 # 지역명이 안 들어간 '맛집' 키워드 제거
-                if "맛집" in kw and core_reg not in kw: continue
+                if "맛집" in kw and short_reg not in kw: continue
                 
                 pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
                 mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
                 base_search = pc + mo
                 
-                # 가중치 부여 (지역명 및 메뉴 중심)
+                # 가중치 부여
                 weight = 1
-                if core_reg in kw: weight = 100
-                if clean_men in kw: weight *= 5
-                if "회식" in kw or "모임" in kw or "룸" in kw: weight *= 3
+                if short_reg in kw: weight = 100
+                if core_men and core_men in kw: weight *= 5
+                if "회식" in kw or "모임" in kw or "룸" in kw or "데이트" in kw: weight *= 3
                 
                 item['total_search'] = base_search
                 item['sort_score'] = base_search * weight
@@ -130,15 +130,16 @@ tab1, tab2 = st.tabs(["🎯 황금키워드 & 소개글", "💬 방문자 리뷰
 with tab1:
     st.header("플레이스 최적화 소개글 생성")
     with st.form("intro_form"):
+        # UI 입력 제한 해제 (스마트 추출 로직이 알아서 걸러줍니다)
         c1, c2, c3, c4 = st.columns(4)
         with c1: 
-            store = st.text_input("매장명", placeholder="우연희")
+            store = st.text_input("매장명", placeholder="육산도 동명")
         with c2: 
-            reg = st.text_input("지역 (10자 내외)", max_chars=12, placeholder="광주 월계동")
+            reg = st.text_input("지역 (예: 광주 동명동)", placeholder="광주 동구 동명동")
         with c3: 
-            men = st.text_input("주력메뉴 (10자 내외)", max_chars=12, placeholder="육사시미")
+            men = st.text_input("주력메뉴", placeholder="카츠, 사시미")
         with c4: 
-            event = st.text_input("이벤트 (선택/10자)", max_chars=15, placeholder="소주 1병 무료")
+            event = st.text_input("이벤트 (선택)", placeholder="소주 1병 무료")
             
         submit_intro = st.form_submit_button("최적화 실행")
     
