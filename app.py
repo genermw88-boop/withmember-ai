@@ -21,7 +21,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. [핵심] 네이버 100~1000건 & 맞춤 상세 키워드 추출 ---
+# --- 2. [개선] 3단 탄력 필터가 적용된 네이버 추출 엔진 ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -35,6 +35,7 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         'X-Signature': signature
     }
     
+    # 동/구 분리 및 메뉴 정제
     reg_parts = reg.strip().split()
     core_gu = ""
     core_dong = ""
@@ -45,17 +46,11 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     if not core_gu and not core_dong and reg_parts:
         core_dong = reg_parts[-1]
 
-    # 메뉴의 핵심 단어만 추출 (예: "꽃삼겹, 목살" -> "꽃삼겹")
     core_men = men.replace(",", " ").split()[0] if men else ""
     
-    # 💡 [개선] 네이버에 던질 힌트를 매장(메뉴)에 완벽하게 맞춤!
-    hints_list = []
-    if core_dong:
-        hints_list.extend([f"{core_dong}맛집", f"{core_dong}{core_men}", f"{core_dong}회식", f"{core_dong}데이트", f"{core_dong}가볼만한곳"])
-    elif core_gu:
-        hints_list.extend([f"{core_gu}맛집", f"{core_gu}{core_men}", f"{core_gu}회식"])
-    
-    params = {'hintKeywords': ",".join(hints_list[:5]), 'showDetail': 1}
+    # 힌트를 가장 광범위하고 정확하게 세팅 (여기서 수백 개를 확보해야 10개를 골라낼 수 있습니다)
+    hints_list = [f"{core_dong}맛집", f"{core_dong}{core_men}", f"{core_gu}맛집", f"{core_dong}회식", f"{core_dong}데이트"]
+    params = {'hintKeywords': ",".join(hints_list), 'showDetail': 1}
     
     try:
         res = requests.get(f'https://api.naver.com{uri}', params=params, headers=headers)
@@ -68,41 +63,46 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             kw = item['relKeyword']
             if any(x in kw for x in ["주변", "근처", "오늘"]): continue
             
-            # 타지역 차단
-            if core_dong and core_dong not in kw and core_gu and core_gu not in kw: 
+            # 타지역 차단 (내 동네나 구 이름이 없으면 가차없이 버림)
+            if (core_dong and core_dong not in kw) and (core_gu and core_gu not in kw): 
                 continue
             
             pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
             mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
             total_search = pc + mo
             
-            # 🚨 [가장 중요한 필터] 100건 이상 ~ 1000건 이하만 무조건 통과!
-            if 100 <= total_search <= 1000:
-                # 상세 키워드 조건: 메뉴 이름이 들어가 있거나, 특정 상황을 나타내는 단어
-                is_detail = any(x in kw for x in [core_men, '회식', '모임', '룸', '데이트', '가족', '핫플', '술집', '카페', '점심', '저녁', '추천'])
+            # 메뉴명, 특정 상황이 들어가면 상세 키워드로 분류
+            is_detail = any(x in kw for x in [core_men, '회식', '모임', '룸', '데이트', '가족', '핫플', '술집', '카페', '점심', '저녁', '추천', '고기집', '삼겹살'])
+            
+            item['total_search'] = total_search
+            item['is_detail'] = is_detail
+            valid_kws.append(item)
                 
-                item['total_search'] = total_search
-                item['is_detail'] = is_detail
-                valid_kws.append(item)
-                
-        # 검색량 순으로 정렬
-        valid_kws = sorted(valid_kws, key=lambda x: x['total_search'], reverse=True)
+        # 💡 [핵심] 유연한 3단 필터 로직
+        # 1순위: 100 ~ 1000건 (가장 완벽한 타겟)
+        tier1 = sorted([k for k in valid_kws if 100 <= k['total_search'] <= 1000], key=lambda x: x['total_search'], reverse=True)
+        # 2순위: 50 ~ 3000건 (1순위가 부족할 때만 가져오는 예비군)
+        tier2 = sorted([k for k in valid_kws if (50 <= k['total_search'] <= 3000) and (k not in tier1)], key=lambda x: x['total_search'], reverse=True)
+        # 3순위: 그 외 내 동네 실제 키워드 (진짜 데이터가 씨가 말랐을 때 최후의 보루)
+        tier3 = sorted([k for k in valid_kws if k not in tier1 and k not in tier2], key=lambda x: x['total_search'], reverse=True)
+        
+        final_pool = tier1 + tier2 + tier3
         
         gold_kws = []
         detail_kws = []
         
-        # 메인과 상세로 분류 (각각 최대 5개씩)
-        for kw in valid_kws:
+        # 10개 꽉꽉 채우기
+        for kw in final_pool:
             if kw['is_detail'] and len(detail_kws) < 5:
                 detail_kws.append(kw)
             elif not kw['is_detail'] and len(gold_kws) < 5:
                 gold_kws.append(kw)
         
-        # 만약 한쪽이 5개가 안 채워졌는데 다른 쪽에 여유분이 있다면 끌어와서 꽉 채워줌
-        for kw in valid_kws:
+        # 한쪽이 부족하면 남은 데이터에서 강제로 끌어와서 무조건 5:5 밸런스를 맞춤
+        for kw in final_pool:
             if len(gold_kws) < 5 and kw not in gold_kws and kw not in detail_kws:
                 gold_kws.append(kw)
-            elif len(detail_kws) < 5 and kw not in gold_kws and kw not in detail_kws:
+            if len(detail_kws) < 5 and kw not in gold_kws and kw not in detail_kws:
                 detail_kws.append(kw)
                 
         return gold_kws[:5], detail_kws[:5], "success"
@@ -157,12 +157,12 @@ with tab1:
         if not store or not reg or not men:
             st.error("매장명, 지역, 메뉴는 필수 입력입니다!")
         else:
-            with st.spinner("100~1000건 사이의 메뉴 맞춤형 알짜 키워드를 추출 중입니다..."):
+            with st.spinner("네이버 상권 데이터에서 알짜 키워드를 수집 중입니다..."):
                 g_kws, d_kws, msg = get_naver_real_keywords(store, reg, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
                 if msg == "success":
                     if not g_kws and not d_kws:
-                        st.warning("이 지역과 메뉴 조합으로는 '검색량 100~1000건' 사이의 키워드가 없습니다. 네이버 공식 데이터 기준이므로 지역명을 조금 더 넓게(구 단위 등) 입력해 보세요.")
+                        st.warning("이 지역과 메뉴 조합으로는 네이버에 검색 데이터가 충분하지 않습니다. 지역명을 '구' 단위로 넓혀보세요.")
                     else:
                         col_a, col_b = st.columns(2)
                         
@@ -184,8 +184,7 @@ with tab1:
                         kw_count = len(all_real_kws)
                         
                         event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
-                        event_rule = "제공된 이벤트를 고객이 방문하고 싶게끔 매력적이고 자연스럽게 문장에 포함하세요." if event else "이벤트가 없으므로 메뉴와 매장의 매력(맛, 분위기 등)을 강조하는 데 집중하세요."
-
+                        
                         prompt = f"""
                         매장명: '{store}'
                         주력메뉴: '{men}'
@@ -196,11 +195,10 @@ with tab1:
 
                         [작성 규칙 - 반드시 지킬 것]
                         1. 위 {kw_count}개의 키워드를 빠짐없이 문장에 자연스럽게 모두 녹여내세요. (단순 나열 금지)
-                        2. 마치 인스타그램 감성 맛집이나 유명 블로거가 소개하듯, 물 흐르듯 자연스러운 문맥을 만들어주세요.
-                        3. {event_rule}
-                        4. 글자 수는 공백 포함 **150자 ~ 200자 사이**(약 4~5문장)로 구성하세요.
-                        5. 방문 욕구를 자극하는 맛깔스러운 표현을 섞어주세요.
-                        6. 세련된 이모티콘 2~3개를 적재적소에 배치하세요.
+                        2. 인스타그램 감성 맛집 블로거처럼 물 흐르듯 자연스럽게 작성하세요.
+                        3. 이벤트가 있다면 고객이 방문하고 싶게끔 어필하고, 없다면 맛과 분위기를 강조하세요.
+                        4. 글자 수는 공백 포함 **150자 ~ 200자 사이**로 넉넉하게 구성하세요.
+                        5. 세련된 이모티콘 2~3개를 적재적소에 배치하세요.
                         """
                         
                         with st.spinner("최적화된 키워드를 바탕으로 상위 1% 카피라이팅을 작성 중입니다..."):
