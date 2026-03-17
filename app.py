@@ -7,10 +7,14 @@ import requests
 from openai import OpenAI
 
 # --- 1. 환경 설정 및 API 키 불러오기 ---
-N_CUSTOMER_ID = st.secrets.get("NAVER_CUSTOMER_ID", "4320532")
-N_API_KEY = st.secrets.get("NAVER_API_KEY", "")
-N_SECRET_KEY = st.secrets.get("NAVER_SECRET_KEY", "")
-O_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
+try:
+    N_CUSTOMER_ID = st.secrets.get("NAVER_CUSTOMER_ID", "4320532")
+    N_API_KEY = st.secrets.get("NAVER_API_KEY", "")
+    N_SECRET_KEY = st.secrets.get("NAVER_SECRET_KEY", "")
+    O_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
+except Exception as e:
+    st.error("Streamlit Cloud의 Secrets 설정이 필요합니다.")
+    st.stop()
 
 def generate_signature(timestamp, method, uri, secret_key):
     message = f"{timestamp}.{method}.{uri}"
@@ -34,7 +38,7 @@ def get_ai_dynamic_hints(store, reg, men, api_key):
         core_men = men.split()[0]
         return f"{core_reg}맛집,{core_reg}{core_men},{core_reg}회식,{core_reg}데이트,{core_reg}핫플"
 
-# --- 3. [복구 및 개선] 네이버 데이터 추출 및 5+5 강제 보장 ---
+# --- 3. 네이버 데이터 추출 및 5+5 강제 보장 ---
 def get_naver_golden_keywords(store, reg, men, ai_hints, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -69,7 +73,12 @@ def get_naver_golden_keywords(store, reg, men, ai_hints, c_id, a_key, s_key):
             data = res.json().get('keywordList', [])
             for item in data:
                 kw = item['relKeyword']
+                # 타지역 및 불필요 단어 완벽 차단
                 if any(x in kw for x in ["주변", "근처", "오늘"]): continue
+                
+                # 지역명이 아예 포함 안 된 키워드는 가차없이 버림 (서판교, 신림동 등 차단)
+                if core_dong and core_dong not in kw and core_gu and core_gu not in kw:
+                    continue
                 
                 pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
                 mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
@@ -91,7 +100,10 @@ def get_naver_golden_keywords(store, reg, men, ai_hints, c_id, a_key, s_key):
         gold_kws = []
         detail_kws = []
         
-        for kw in sorted_data := sorted(target_kws, key=lambda x: x['total_search'], reverse=True):
+        # [에러 해결] 문제가 되었던 왈러스 연산자(:=) 제거 및 분리
+        sorted_data = sorted(target_kws, key=lambda x: x['total_search'], reverse=True)
+        
+        for kw in sorted_data:
             if not kw['is_detail'] and len(gold_kws) < 5:
                 gold_kws.append(kw)
             elif kw['is_detail'] and len(detail_kws) < 5:
@@ -102,7 +114,7 @@ def get_naver_golden_keywords(store, reg, men, ai_hints, c_id, a_key, s_key):
             if kw not in gold_kws and kw not in detail_kws:
                 gold_kws.append(kw)
                 
-        # [핵심 보완] 그래도 5개가 안 채워지면 AI 가상 키워드로 무조건 화면을 채움!
+        # 5개가 안 채워지면 AI 가상 키워드로 무조건 화면을 채움
         fallback_mains = [f"{core_dong} {core_men}", f"{core_dong} 맛집", f"{core_gu} {core_men}", f"{core_gu} 맛집", f"{core_dong} 식당"]
         while len(gold_kws) < 5:
             for fb in fallback_mains:
@@ -135,10 +147,9 @@ def generate_ai_content(prompt, api_key):
     except Exception as e:
         return f"생성 실패: {str(e)}"
 
-# --- 5. Streamlit UI 구성 (완벽 복구) ---
+# --- 5. Streamlit UI 구성 ---
 st.set_page_config(page_title="위드멤버 플레이스 최적화", page_icon="🚀", layout="wide")
 
-# 사이드바 API 연결 상태창 복구!
 with st.sidebar:
     st.title("🔑 API 설정")
     if not (N_API_KEY and N_SECRET_KEY and O_API_KEY):
@@ -171,7 +182,7 @@ with tab1:
                 ai_hints = get_ai_dynamic_hints(store, reg, men, O_API_KEY)
                 st.caption(f"🤖 AI 힌트: `{ai_hints}`") 
             
-            with st.spinner("2단계: 알짜 중소형 키워드 10개를 선별합니다..."):
+            with st.spinner("2단계: 타지역(신림, 서판교 등)을 차단하고 알짜 키워드 10개를 선별합니다..."):
                 g_kws, d_kws, msg = get_naver_golden_keywords(store, reg, men, ai_hints, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
                 if msg == "success":
