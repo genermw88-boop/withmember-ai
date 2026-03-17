@@ -18,8 +18,8 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 3. 네이버 황금키워드 추출 함수 (상세 데이터 포함) ---
-def get_naver_golden_keywords(hint_keyword, c_id, a_key, s_key):
+# --- 3. [개선] AI 기반 황금키워드 5개 완벽 추출 함수 ---
+def get_naver_golden_keywords(reg, cat, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
     timestamp = str(round(time.time() * 1000))
@@ -32,8 +32,9 @@ def get_naver_golden_keywords(hint_keyword, c_id, a_key, s_key):
         'X-Signature': signature
     }
     
-    safe_keyword = hint_keyword.replace(" ", "")
-    params = {'hintKeywords': safe_keyword, 'showDetail': 1}
+    # 데이터 확보량 극대화: 1개의 단어가 아닌 5개의 힌트 키워드를 동시에 던져 수백 개를 확보합니다.
+    hints = f"{reg},{reg}맛집,{reg}{cat},{cat},{men}".replace(" ", "")
+    params = {'hintKeywords': hints, 'showDetail': 1}
     
     try:
         res = requests.get(f'https://api.naver.com{uri}', params=params, headers=headers)
@@ -41,35 +42,43 @@ def get_naver_golden_keywords(hint_keyword, c_id, a_key, s_key):
         if res.status_code == 200:
             data = res.json().get('keywordList', [])
             if not data:
-                return [], "해당 키워드는 네이버 검색량 데이터가 부족합니다."
+                return [], "키워드 데이터가 부족합니다."
             
-            for item in data:
+            # 정확도 향상: 검색 결과 중 '지역명(예: 야탑)'이 포함된 키워드만 1차 필터링
+            relevant_data = [item for item in data if reg in item['relKeyword']]
+            if len(relevant_data) < 5: 
+                relevant_data = data # 필터링 결과가 너무 적으면 전체 데이터 사용
+            
+            for item in relevant_data:
                 pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
                 mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
                 item['total_search'] = pc + mo
-                item['comp_level'] = item.get('compIdx', '중간') # 경쟁도: 높음, 중간, 낮음
+                item['comp_level'] = item.get('compIdx', '중간')
                 
-            # 검색량 순으로 정렬
-            sorted_data = sorted(data, key=lambda x: x['total_search'], reverse=True)
+            sorted_data = sorted(relevant_data, key=lambda x: x['total_search'], reverse=True)
             
-            # 1. 가장 센 키워드 (검색량 1위)
-            top_kw = sorted_data[0]
-            
-            # 2. 틈새 키워드 4개 (검색량 500~3000 사이에서 추출)
-            niche_candidates = [i for i in sorted_data if 500 <= i['total_search'] <= 3000]
-            
-            # 틈새 키워드가 4개 이상이면 거기서 4개 추출, 부족하면 그냥 차순위에서 추출
-            if len(niche_candidates) >= 4:
-                niche_kws = niche_candidates[:4]
-            else:
-                niche_kws = sorted_data[1:5]
+            # [핵심] 무조건 5개를 꽉 채워서 추출하는 로직
+            final_kws = []
+            if sorted_data:
+                final_kws.append(sorted_data[0]) # 1위 메인 키워드
                 
-            # 최종 5개 조합 (딕셔너리 형태로 상세 정보 모두 반환)
-            final_kws = [top_kw] + niche_kws
+                # 틈새 키워드 (검색량 500 ~ 5000 사이) 우선 추출
+                niche_candidates = [i for i in sorted_data[1:] if 500 <= i['total_search'] <= 5000]
+                for kw in niche_candidates:
+                    if kw not in final_kws:
+                        final_kws.append(kw)
+                    if len(final_kws) == 5: break
+                
+                # 그래도 5개가 안 채워졌다면, 남은 순위권에서 강제로 채움
+                for kw in sorted_data[1:]:
+                    if len(final_kws) == 5: break
+                    if kw not in final_kws:
+                        final_kws.append(kw)
+                        
             return final_kws, "success"
             
         else:
-            return [], f"네이버 API 에러 발생 (코드: {res.status_code})"
+            return [], f"API 에러 (코드: {res.status_code})"
             
     except Exception as e:
         return [], f"시스템 에러: {str(e)}"
@@ -81,9 +90,10 @@ def generate_ai_content(prompt, api_key):
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "너는 센스 있고 친절한 플레이스 마케팅 전문가야."},
+                {"role": "system", "content": "너는 센스 있고 철저한 플레이스 마케팅 전문가야."},
                 {"role": "user", "content": prompt}
-            ]
+            ],
+            temperature=0.7
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
@@ -95,7 +105,7 @@ st.set_page_config(page_title="위드멤버 통합 관리 시스템", page_icon=
 with st.sidebar:
     st.title("🔑 API 설정")
     if not (N_API_KEY and N_SECRET_KEY and O_API_KEY):
-        st.warning("Secrets를 설정하거나 아래에 직접 입력하세요.")
+        st.warning("Secrets를 설정하거나 직접 입력하세요.")
         N_API_KEY = st.text_input("Naver API KEY", type="password")
         N_SECRET_KEY = st.text_input("Naver SECRET KEY", type="password")
         O_API_KEY = st.text_input("OpenAI API KEY", type="password")
@@ -120,28 +130,39 @@ with tab1:
         if not store or not reg or not cat:
             st.error("매장명, 지역, 업종은 필수 입력입니다!")
         else:
-            with st.spinner("데이터 분석 중..."):
-                kws_data, msg = get_naver_golden_keywords(f"{reg}{cat}", N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
+            with st.spinner("수백 개의 데이터를 분석하여 최적의 5개를 추출 중..."):
+                # 변경점: 이제 키워드 추출 시 다중 힌트를 만들기 위해 개별 값을 넘깁니다.
+                kws_data, msg = get_naver_golden_keywords(reg, cat, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
-                if kws_data:
-                    st.subheader("🎯 이번 달 황금키워드 조합")
+                if kws_data and len(kws_data) > 0:
+                    st.subheader("🎯 이번 달 황금키워드 5개 조합")
                     
-                    # 1위 메인 키워드 출력
-                    st.markdown(f"**🥇 대표 키워드:** `{kws_data[0]['relKeyword']}` (월간 검색량: **{kws_data[0]['total_search']:,}**건 / 경쟁도: **{kws_data[0]['comp_level']}**)")
+                    st.markdown(f"**🥇 1위 메인 키워드:** `{kws_data[0]['relKeyword']}` (검색량: **{kws_data[0]['total_search']:,}**건 / 경쟁도: {kws_data[0]['comp_level']})")
                     
-                    # 2~5위 틈새 키워드 출력
                     niche_str = ""
-                    for i, kw in enumerate(kws_data[1:], 1):
-                        niche_str += f"- `{kw['relKeyword']}` (월간 검색량: {kw['total_search']:,}건 / 경쟁도: {kw['comp_level']})\n"
+                    for kw in kws_data[1:]:
+                        niche_str += f"- `{kw['relKeyword']}` (검색량: {kw['total_search']:,}건 / 경쟁도: {kw['comp_level']})\n"
                     st.markdown(f"**💡 틈새 키워드 4개:**\n{niche_str}")
                     
                     st.divider()
                     
-                    # AI 소개글 생성용 키워드 텍스트 추출
                     kw_names = [k['relKeyword'] for k in kws_data]
                     
-                    # 50자 내외 생성 프롬프트
-                    prompt = f"매장명:'{store}', 지역:'{reg}', 업종:'{cat}', 메뉴:'{men}', 핵심키워드:'{','.join(kw_names)}'를 모두 포함해서 네이버 플레이스 소개글(새소식)을 50자 내외로 짧고 임팩트 있게 써줘. 첫 문장에 매장명과 1위 키워드({kw_names[0]})를 자연스럽게 배치하고 센스있는 이모티콘 1~2개 넣어줘."
+                    # [개선] 50자 내외의 엄격한 프롬프트 적용
+                    prompt = f"""
+                    매장명: '{store}'
+                    지역: '{reg}'
+                    업종: '{cat}'
+                    메뉴: '{men}'
+                    선정된 황금키워드 5개: {', '.join(kw_names)}
+
+                    [작성 규칙 - 매우 중요!]
+                    1. 위 5개의 키워드를 빠짐없이 모두 문장에 자연스럽게 녹여내라.
+                    2. 길이는 반드시 '공백 포함 40자~60자 사이'로 아주 짧고 압축적으로 쓸 것.
+                    3. 첫 문장은 반드시 '{store}'(매장명)과 1위 키워드('{kw_names[0]}')로 시작할 것.
+                    4. 친근한 이모티콘 1~2개를 적절히 넣어라.
+                    5. 인사말이나 부연 설명 없이 딱 '소개글 본문'만 출력해라.
+                    """
                     
                     intro_res = generate_ai_content(prompt, O_API_KEY)
                     st.subheader("📝 최적화 소개글 (복사/붙여넣기용)")
@@ -150,7 +171,7 @@ with tab1:
                 else: 
                     st.error(msg)
 
-# --- Tab 2: 방문자 리뷰 답글 (기존 유지) ---
+# --- Tab 2: 방문자 리뷰 답글 ---
 with tab2:
     st.header("방문자 리뷰 답글 생성기")
     with st.form("review_form"):
