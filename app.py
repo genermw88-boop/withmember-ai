@@ -17,12 +17,11 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. AI 기반 다이나믹 힌트 추출 함수 ---
-def get_ai_dynamic_hints(reg, men, api_key):
+# --- 2. [개선] 매장명과 메뉴를 모두 고려한 AI 다이나믹 힌트 ---
+def get_ai_dynamic_hints(store, reg, men, api_key):
     try:
         client = OpenAI(api_key=api_key)
-        prompt = f"지역:'{reg}', 메뉴:'{men}'. 이 매장을 방문할 고객들이 네이버에 검색할 만한 핵심 키워드 딱 5개를 콤마(,)로만 연결해서 출력해. 반드시 지역명(동 또는 구)을 포함하고, 메뉴 특성에 맞춰 상황을 다양하게 조합해. (출력예시: 장동술집,광주동구맛집,장동육사시미,장동데이트,동명동핫플)"
-        
+        prompt = f"매장명:'{store}', 지역:'{reg}', 메뉴:'{men}'. 이 매장을 방문할 고객들이 네이버에 검색할 만한 핵심 키워드 10개를 콤마(,)로만 연결해서 출력해. 반드시 지역명(동 또는 구)을 포함하고, 메뉴 특성에 맞춰 상황(회식, 데이트, 가성비, 핫플 등)을 다양하게 조합해."
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
@@ -30,14 +29,14 @@ def get_ai_dynamic_hints(reg, men, api_key):
         )
         hints = response.choices[0].message.content.strip()
         hints = hints.replace(" ", "").replace(".", "").replace("\n", "")
-        return ",".join(hints.split(",")[:5])
+        return ",".join(hints.split(",")[:10]) # 더 많은 힌트를 네이버에 던집니다
     except Exception:
         core_reg = reg.split()[-1]
         core_men = men.split()[0]
-        return f"{core_reg}맛집,{core_reg}{core_men},{core_reg}회식,{core_reg}모임,{core_reg}데이트"
+        return f"{core_reg}맛집,{core_reg}{core_men},{core_reg}회식,{core_reg}데이트,{core_reg}핫플"
 
-# --- 3. [개선] 강제 5+3 보장 네이버 API 호출 ---
-def get_naver_golden_keywords(reg, men, ai_hints, c_id, a_key, s_key):
+# --- 3. [개선] 100~1000건 필터링 & 메인5 + 상세5 추출 ---
+def get_naver_golden_keywords(store, reg, men, ai_hints, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
     timestamp = str(round(time.time() * 1000))
@@ -84,11 +83,15 @@ def get_naver_golden_keywords(reg, men, ai_hints, c_id, a_key, s_key):
                 
                 if not is_safe_region: continue
                 
-                is_detail = any(x in kw for x in ['회식', '모임', '룸', '데이트', '가족', '핫플', '술집', '카페', '가성비', '분위기', '점심', '저녁'])
-                
                 pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
                 mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
                 base_search = pc + mo
+                
+                # 🚨 [가장 중요한 커트라인] 100건 미만이거나 1000건 이상이면 무조건 버립니다!
+                if base_search < 100 or base_search >= 1000:
+                    continue
+                
+                is_detail = any(x in kw for x in ['회식', '모임', '룸', '데이트', '가족', '핫플', '술집', '카페', '가성비', '분위기', '점심', '저녁', '추천'])
                 
                 weight = 1
                 if kw in hint_words: weight = 200
@@ -109,35 +112,29 @@ def get_naver_golden_keywords(reg, men, ai_hints, c_id, a_key, s_key):
         gold_kws = []
         detail_kws = []
         
-        # 실제 데이터로 메인/상세 분리
+        # 메인 5개 / 상세 5개 엄격 분리
         for kw in sorted_data:
             if not kw['is_detail'] and len(gold_kws) < 5:
                 gold_kws.append(kw)
-            elif kw['is_detail'] and len(detail_kws) < 3:
+            elif kw['is_detail'] and len(detail_kws) < 5:
                 detail_kws.append(kw)
         
-        # 섞인 키워드로 메인 보충
         for kw in sorted_data:
             if len(gold_kws) == 5: break
             if kw not in gold_kws and kw not in detail_kws:
                 gold_kws.append(kw)
                 
-        # [핵심] 네이버 데이터가 모자랄 때 무조건 5개로 채우는 메인 키워드 강제 생성기!
-        fallback_mains = [
-            f"{core_dong} {core_men}", f"{core_dong} 맛집", 
-            f"{core_gu} {core_men}", f"{core_gu} 맛집", f"{core_dong} 식당"
-        ]
+        # 100~999건 조건이 너무 빡빡해서 네이버 데이터가 모자랄 경우, AI가 맞춤형으로 꽉 채웁니다.
+        fallback_mains = [f"{core_dong} {core_men}", f"{core_dong} 맛집", f"{core_gu} {core_men}", f"{core_gu} 맛집", f"{core_dong} 식당"]
         while len(gold_kws) < 5:
-            # 중복 안 되는 가상 키워드 골라넣기
             for fb in fallback_mains:
                 if len(gold_kws) == 5: break
                 if not any(k['relKeyword'] == fb.replace(" ", "") for k in gold_kws):
-                    gold_kws.append({"relKeyword": fb.replace(" ", ""), "total_search": "AI 분석", "comp_level": "타겟"})
+                    gold_kws.append({"relKeyword": fb.replace(" ", ""), "total_search": "AI 분석(중소형)", "comp_level": "타겟"})
 
-        # 상세 키워드도 모자라면 무조건 3개로 채우는 생성기
-        fallback_details = [f"{core_dong} 분위기 맛집", f"{core_dong} 데이트", f"{core_dong} 모임장소"]
-        while len(detail_kws) < 3:
-            detail_kws.append({"relKeyword": fallback_details[len(detail_kws)].replace(" ", ""), "total_search": "AI 타겟팅", "comp_level": "낮음"})
+        fallback_details = [f"{core_dong} 분위기 맛집", f"{core_dong} 데이트 코스", f"{core_dong} 모임장소 추천", f"{core_dong} {core_men} 추천", f"{core_dong} 핫플"]
+        while len(detail_kws) < 5:
+            detail_kws.append({"relKeyword": fallback_details[len(detail_kws)].replace(" ", ""), "total_search": "AI 분석(상세)", "comp_level": "타겟"})
             
         return gold_kws, detail_kws, "success"
 
@@ -151,7 +148,7 @@ def generate_ai_content(prompt, api_key):
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다. 키워드를 자연스럽고 매력적인 문장으로 녹여냅니다."},
+                {"role": "system", "content": "당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다. 키워드를 기계적으로 나열하지 않고 자연스럽고 매력적인 문장으로 녹여냅니다."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.85
@@ -190,26 +187,29 @@ with tab1:
         if not store or not reg or not men:
             st.error("매장명, 지역, 주력메뉴는 필수 입력입니다!")
         else:
-            with st.spinner("1단계: AI가 매장 특성에 맞는 맞춤 검색 트렌드를 분석 중입니다..."):
-                ai_hints = get_ai_dynamic_hints(reg, men, O_API_KEY)
+            with st.spinner("1단계: 매장명과 메뉴에 맞는 맞춤 검색 트렌드를 분석 중입니다..."):
+                ai_hints = get_ai_dynamic_hints(store, reg, men, O_API_KEY)
                 st.caption(f"🤖 AI 분석 기초 검색어: `{ai_hints}`") 
             
-            with st.spinner("2단계: 네이버 실제 데이터와 AI 타겟팅을 혼합하여 최적의 조합을 추출합니다..."):
-                g_kws, d_kws, msg = get_naver_golden_keywords(reg, men, ai_hints, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
+            with st.spinner("2단계: 100~999건 사이의 알짜 중소형 키워드 10개를 선별합니다..."):
+                # 매장명(store)도 함께 넘겨 AI 분석 정확도를 높임
+                g_kws, d_kws, msg = get_naver_golden_keywords(store, reg, men, ai_hints, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
-                if g_kws and len(g_kws) == 5: # 무조건 5개가 보장됨
+                if g_kws and len(g_kws) == 5:
                     col_a, col_b = st.columns(2)
                     
                     with col_a:
-                        st.subheader("🎯 지역 메인 키워드 5개")
-                        search_vol_1 = f"{g_kws[0]['total_search']:,}건" if isinstance(g_kws[0]['total_search'], int) else g_kws[0]['total_search']
-                        st.markdown(f"**🥇 1위:** `{g_kws[0]['relKeyword']}` (검색량: **{search_vol_1}**)")
-                        for kw in g_kws[1:]:
+                        st.subheader("🎯 지역 메인 키워드 5개 (100~999건)")
+                        for i, kw in enumerate(g_kws):
                             search_vol = f"{kw['total_search']:,}건" if isinstance(kw['total_search'], int) else kw['total_search']
-                            st.markdown(f"- `{kw['relKeyword']}` (검색량: {search_vol})")
+                            if i == 0:
+                                st.markdown(f"**🥇 1위:** `{kw['relKeyword']}` (검색량: **{search_vol}**)")
+                            else:
+                                st.markdown(f"- `{kw['relKeyword']}` (검색량: {search_vol})")
                             
                     with col_b:
-                        st.subheader("✨ 상세/상황별 키워드 3개")
+                        # 3개에서 5개로 노출 항목 확장
+                        st.subheader("✨ 상세/상황별 키워드 5개")
                         for kw in d_kws:
                             search_vol = f"{kw['total_search']:,}건" if isinstance(kw['total_search'], int) else kw['total_search']
                             st.markdown(f"✔️ `{kw['relKeyword']}` (검색량: {search_vol})")
@@ -222,28 +222,29 @@ with tab1:
                     event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
                     event_rule = "제공된 이벤트를 고객이 방문하고 싶게끔 매력적이고 자연스럽게 문장에 포함하세요." if event else "이벤트가 없으므로 메뉴와 매장의 매력(맛, 분위기 등)을 강조하는 데 집중하세요."
 
+                    # 키워드가 10개로 늘어났으므로 글자 수도 살짝 더 확보해줍니다.
                     prompt = f"""
                     매장명: '{store}'
                     주력메뉴: '{men}'
                     {event_instruction}
                     
-                    [필수 반영 타겟 키워드 8개]
-                    1. 메인 지역 키워드: {', '.join(g_names)}
-                    2. 상세/상황별 키워드: {', '.join(d_names)}
+                    [필수 반영 타겟 키워드 10개]
+                    1. 메인 지역 키워드 (5개): {', '.join(g_names)}
+                    2. 상세/상황별 키워드 (5개): {', '.join(d_names)}
 
                     [작성 규칙 - 반드시 지킬 것]
-                    1. 위 8개의 키워드를 빠짐없이 문장에 자연스럽게 모두 녹여내세요. (키워드 단순 억지 나열 절대 금지)
+                    1. 위 10개의 키워드를 빠짐없이 문장에 자연스럽게 모두 녹여내세요. (키워드 단순 억지 나열 절대 금지)
                     2. 마치 인스타그램 감성 맛집이나 유명 블로거가 소개하듯, 물 흐르듯 자연스러운 문맥을 만들어주세요.
                     3. {event_rule}
-                    4. 글자 수는 공백 포함 **130자 ~ 180자 사이**(약 3~4문장)로 구성하세요.
+                    4. 글자 수는 공백 포함 **150자 ~ 200자 사이**(약 4~5문장)로 구성하여 10개 키워드가 여유롭게 들어가게 하세요.
                     5. '육즙', '프라이빗', '가성비', '친절함' 등 방문 욕구를 자극하는 표현을 섞어주세요.
                     6. 세련된 이모티콘 2~3개를 적재적소에 배치하세요.
                     """
                     
-                    with st.spinner("3단계: 상위 1% 카피라이팅을 작성 중입니다..."):
+                    with st.spinner("3단계: 10대 키워드가 포함된 상위 1% 카피라이팅을 작성 중입니다..."):
                         intro_res = generate_ai_content(prompt, O_API_KEY)
                         
-                    st.subheader("📝 8대 키워드 최적화 소개글 (복사/붙여넣기용)")
+                    st.subheader("📝 10대 키워드 최적화 소개글 (복사/붙여넣기용)")
                     st.info(intro_res)
                     st.code(intro_res)
                 else: 
