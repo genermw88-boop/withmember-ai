@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import base64
 import requests
-from openai import OpenAI  # 최신 버전에 맞게 불러오기 방식 변경
+from openai import OpenAI
 
 # --- 1. 환경 설정 및 API 키 불러오기 ---
 N_CUSTOMER_ID = st.secrets.get("NAVER_CUSTOMER_ID", "4320532")
@@ -18,7 +18,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 3. 네이버 황금키워드 추출 함수 (에러 메시지 강화) ---
+# --- 3. 네이버 황금키워드 추출 함수 ---
 def get_naver_golden_keywords(hint_keyword, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -31,15 +31,18 @@ def get_naver_golden_keywords(hint_keyword, c_id, a_key, s_key):
         'X-Customer': str(c_id),
         'X-Signature': signature
     }
-    params = {'hintKeywords': hint_keyword, 'showDetail': '1'}
+    
+    # 400 에러(Bad Request) 방지를 위해 공백을 완전히 제거합니다 (예: '야탑동 한식' -> '야탑동한식')
+    safe_keyword = hint_keyword.replace(" ", "")
+    params = {'hintKeywords': safe_keyword, 'showDetail': 1}
+    
     try:
         res = requests.get(f'https://api.naver.com{uri}', params=params, headers=headers)
         
-        # 1. API 호출 성공 시
         if res.status_code == 200:
             data = res.json().get('keywordList', [])
             if not data:
-                return [], "해당 키워드는 네이버 검색량 데이터가 너무 적어 추출할 수 없습니다. '강남역 고기집'처럼 조금 더 큰 단위로 검색해보세요."
+                return [], "해당 키워드는 네이버 검색량 데이터가 부족합니다. '분당한식'처럼 조금 더 넓은 지역으로 검색해보세요."
             
             for item in data:
                 pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
@@ -52,21 +55,20 @@ def get_naver_golden_keywords(hint_keyword, c_id, a_key, s_key):
             golden.extend(niche[:4] if len(niche) >= 4 else [i['relKeyword'] for i in sorted_data[1:5]])
             return golden[:5], "success"
             
-        # 2. 인증 오류 등 실패 시 (정확한 원인 반환)
         else:
-            return [], f"네이버 API 에러 발생 (코드: {res.status_code}) - API 키가 정확한지 확인해주세요."
+            return [], f"네이버 API 에러 발생 (코드: {res.status_code}) - API 설정이나 네트워크를 확인해주세요."
             
     except Exception as e:
-        return [], f"시스템 통신 에러: {str(e)}"
+        return [], f"시스템 에러: {str(e)}"
 
-# --- 4. OpenAI 텍스트 생성 함수 (최신 v1.0.0+ 문법 적용) ---
+# --- 4. OpenAI 텍스트 생성 함수 ---
 def generate_ai_content(prompt, api_key):
     try:
-        client = OpenAI(api_key=api_key) # 최신 문법으로 변경됨
+        client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "너는 플레이스 마케팅 및 고객관리 전문가야."},
+                {"role": "system", "content": "너는 센스 있고 친절한 플레이스 마케팅 전문가야."},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -102,29 +104,27 @@ with tab1:
         submit_intro = st.form_submit_button("최적화 실행")
     
     if submit_intro:
-        if not store:
-            st.error("매장명을 입력해주세요!")
+        if not store or not reg or not cat:
+            st.error("매장명, 지역, 업종은 필수 입력입니다!")
         else:
             with st.spinner("데이터 분석 중..."):
-                # 변경점: 키워드 결과와 에러 메시지를 동시에 받아옵니다.
-                kws, msg = get_naver_golden_keywords(f"{reg} {cat}", N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
+                kws, msg = get_naver_golden_keywords(f"{reg}{cat}", N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
                 if kws:
                     st.success(f"🎯 이번 달 황금키워드: {', '.join(kws)}")
-                    prompt = f"매장명:'{store}', 지역:'{reg}', 업종:'{cat}', 메뉴:'{men}', 황금키워드:'{','.join(kws)}'를 모두 포함해서 네이버 플레이스 소개글(새소식)을 50자 내외로 써줘. 첫 문장에 매장명과 1위 키워드를 자연스럽게 배치해."
+                    # 소개글 프롬프트에도 이모티콘을 살짝 넣도록 유도
+                    prompt = f"매장명:'{store}', 지역:'{reg}', 업종:'{cat}', 메뉴:'{men}', 황금키워드:'{','.join(kws)}'를 모두 포함해서 네이버 플레이스 소개글(새소식)을 50자 내외로 써줘. 첫 문장에 매장명과 1위 키워드를 자연스럽게 배치하고, 센스있는 이모티콘도 1~2개 넣어줘."
                     intro_res = generate_ai_content(prompt, O_API_KEY)
                     st.info(intro_res)
                     st.code(intro_res)
                 else: 
-                    # 키워드를 못 가져왔을 때 정확한 이유를 빨간색으로 띄워줍니다.
                     st.error(msg)
 
-# --- Tab 2: 방문자 리뷰 답글 (요청하신 대로 매장명 입력 삭제) ---
+# --- Tab 2: 방문자 리뷰 답글 ---
 with tab2:
     st.header("방문자 리뷰 답글 생성기")
     with st.form("review_form"):
-        # 매장명 입력란 삭제됨
-        review_content = st.text_area("손님이 남긴 리뷰 내용을 입력하세요", placeholder="맛있어요")
+        review_content = st.text_area("손님이 남긴 리뷰 내용을 입력하세요", placeholder="고기가 맛있고 친절해요!")
         submit_review = st.form_submit_button("답글 생성")
     
     if submit_review:
@@ -132,7 +132,8 @@ with tab2:
             st.warning("리뷰 내용을 입력해주세요!")
         else:
             with st.spinner("정성스러운 답글을 작성 중..."):
-                prompt = f"다음 리뷰에 대해 친절하고 정중한 사장님 톤으로 답글을 써줘. 리뷰내용: {review_content}"
+                # 프롬프트에 '이모티콘' 지시어 강력하게 추가!
+                prompt = f"다음 손님의 리뷰에 대해 정말 친절하고 감사해하는 사장님 톤으로 답글을 써줘. 딱딱하지 않게 친근한 이모티콘(예: 😊, 💖, 👍, ✨ 등)을 문맥에 맞게 2~3개 이상 듬뿍 사용해줘. 리뷰내용: {review_content}"
                 review_res = generate_ai_content(prompt, O_API_KEY)
                 st.success("작성된 답글:")
                 st.write(review_res)
