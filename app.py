@@ -17,8 +17,29 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 3. [오류 완벽 해결] 정직한 지역명 추출 로직 ---
-def get_naver_golden_keywords(reg, men, c_id, a_key, s_key):
+# --- 2. [NEW] AI 기반 다이나믹 힌트 추출 함수 ---
+def get_ai_dynamic_hints(reg, men, api_key):
+    try:
+        client = OpenAI(api_key=api_key)
+        prompt = f"지역:'{reg}', 메뉴/업종:'{men}'. 이 매장을 방문할 고객들이 네이버에 검색할 만한 핵심 키워드 딱 5개를 콤마(,)로만 연결해서 출력해. 반드시 지역명(동 또는 구)을 포함하고, 메뉴 특성에 맞춰 상황(회식, 데이트, 핫플, 술집, 밥집 등)을 다양하게 조합해. (출력예시: 장동술집,광주동구맛집,장동육사시미,장동데이트,동명동핫플)"
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini", # 힌트 추출은 속도를 위해 mini 모델 사용
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7
+        )
+        hints = response.choices[0].message.content.strip()
+        # 공백 제거 및 딱 5개만 자르기
+        hints = hints.replace(" ", "").replace(".", "").replace("\n", "")
+        return ",".join(hints.split(",")[:5])
+    except Exception:
+        # AI 호출 실패 시 비상용 기본 로직
+        core_reg = reg.split()[-1]
+        core_men = men.split()[0]
+        return f"{core_reg}맛집,{core_reg}{core_men},{core_reg}회식,{core_reg}모임,{core_reg}데이트"
+
+# --- 3. [개선] 다이나믹 힌트를 활용한 네이버 API 호출 ---
+def get_naver_golden_keywords(reg, men, ai_hints, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
     timestamp = str(round(time.time() * 1000))
@@ -31,66 +52,65 @@ def get_naver_golden_keywords(reg, men, c_id, a_key, s_key):
         'X-Signature': signature
     }
     
-    # 1. 띄어쓰기 기준으로 구와 동을 찾습니다. (자르지 않고 원형 보존!)
+    # 지역명 필터링용 데이터 준비 (예: 광주 동구 장동 -> city:광주, gu:동구, dong:장동)
     reg_parts = reg.strip().split()
+    city = reg_parts[0][:2] if reg_parts else ""
     core_gu = ""
     core_dong = ""
     for p in reg_parts:
-        if p.endswith('구'): core_gu = p        # 예: 동구 (그대로 유지)
-        elif p.endswith('동') or p.endswith('역'): core_dong = p # 예: 장동 (그대로 유지)
-        
+        if p.endswith('구'): core_gu = p
+        elif p.endswith('동') or p.endswith('역'): core_dong = p
     if not core_gu and not core_dong and reg_parts:
-        core_dong = reg_parts[-1] # 구/동이 없으면 마지막 단어 통째로 사용
+        core_dong = reg_parts[-1]
 
-    # 2. 메뉴 정제 (콤마 앞 단어만 힌트로 사용)
     core_men = men.replace(",", " ").split()[0] if men else ""
     
-    # 3. 구와 동을 원형 그대로 네이버에 힌트 투척!
-    hints_list = []
-    if core_gu: hints_list.extend([f"{core_gu}맛집", f"{core_gu}{core_men}"])
-    if core_dong: hints_list.extend([f"{core_dong}맛집", f"{core_dong}{core_men}", f"{core_dong}회식"])
-    if not hints_list: hints_list = [f"{reg.replace(' ', '')}맛집"]
-    
-    safe_hints = ",".join(hints_list[:5])
-    params = {'hintKeywords': safe_hints, 'showDetail': 1}
+    # AI가 뽑아준 5개 힌트를 네이버에 투척!
+    params = {'hintKeywords': ai_hints, 'showDetail': 1}
     
     try:
         res = requests.get(f'https://api.naver.com{uri}', params=params, headers=headers)
         
         if res.status_code == 200:
             data = res.json().get('keywordList', [])
-            if not data: return [], [], f"'{core_dong or core_gu}' 관련 검색량이 부족합니다."
+            if not data: return [], [], f"데이터가 부족합니다. AI가 분석한 검색어({ai_hints})에 대한 결과가 없습니다."
             
             filtered_data = []
+            # 힌트로 사용된 단어들 분리
+            hint_words = ai_hints.split(",")
+            
             for item in data:
                 kw = item['relKeyword']
                 
+                # 불필요 단어 컷
                 if any(x in kw for x in ["주변", "근처", "오늘"]): continue
                 
-                is_gu = bool(core_gu and core_gu in kw)
-                is_dong = bool(core_dong and core_dong in kw)
+                # 타지역 차단: 시, 구, 동 이름 중 하나라도 안 들어가면 버림 (단, AI 힌트에 정확히 있던 단어면 살림)
+                is_safe_region = False
+                if city and city in kw: is_safe_region = True
+                if core_gu and core_gu in kw: is_safe_region = True
+                if core_dong and core_dong in kw: is_safe_region = True
+                if kw in hint_words: is_safe_region = True
                 
-                # 구나 동 이름이 명확히 안 들어가면 버림 (타지역 차단)
-                if (core_gu or core_dong) and not (is_gu or is_dong): continue
+                if not is_safe_region: continue
                 
-                is_detail = any(x in kw for x in ['회식', '모임', '룸', '데이트', '가족', '외식', '추천', '가성비', '분위기', '점심', '저녁'])
+                is_detail = any(x in kw for x in ['회식', '모임', '룸', '데이트', '가족', '핫플', '술집', '카페', '가성비', '분위기', '점심', '저녁'])
                 
                 pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
                 mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
                 base_search = pc + mo
                 
+                # 가중치 (AI 힌트 단어거나 메뉴가 들어가면 점수 팍팍)
                 weight = 1
-                if is_gu and is_dong: weight = 150
-                elif is_dong: weight = 100
-                elif is_gu: weight = 80
+                if kw in hint_words: weight = 200
+                elif core_dong in kw: weight = 100
+                elif core_gu in kw: weight = 80
                 if core_men and core_men in kw: weight *= 3
                 if is_detail: weight *= 2
                 
                 item['total_search'] = base_search
                 item['sort_score'] = base_search * weight
                 item['comp_level'] = item.get('compIdx', '중간')
-                item['is_gu'] = is_gu
-                item['is_dong'] = is_dong
                 item['is_detail'] = is_detail
                 
                 filtered_data.append(item)
@@ -100,32 +120,22 @@ def get_naver_golden_keywords(reg, men, c_id, a_key, s_key):
             gold_kws = []
             detail_kws = []
             
-            if sorted_data:
-                gold_kws.append(sorted_data[0]) 
-                
-                for kw in sorted_data:
-                    if kw['is_gu'] and not kw['is_dong'] and kw not in gold_kws and not kw['is_detail']:
-                        gold_kws.append(kw)
-                        break
-                        
-                for kw in sorted_data:
-                    if kw['is_dong'] and kw not in gold_kws and not kw['is_detail']:
-                        gold_kws.append(kw)
-                        break
-                        
-                for kw in sorted_data:
-                    if len(gold_kws) == 5: break
-                    if kw not in gold_kws and not kw['is_detail']:
-                        gold_kws.append(kw)
-            
+            # 메인 5개 / 상세 3개 분리
             for kw in sorted_data:
-                if len(detail_kws) == 3: break
-                if kw['is_detail'] and kw not in gold_kws:
+                if not kw['is_detail'] and len(gold_kws) < 5:
+                    gold_kws.append(kw)
+                elif kw['is_detail'] and len(detail_kws) < 3:
                     detail_kws.append(kw)
+            
+            # 메인 키워드가 부족하면 남은 걸로 채움
+            for kw in sorted_data:
+                if len(gold_kws) == 5: break
+                if kw not in gold_kws and kw not in detail_kws:
+                    gold_kws.append(kw)
                     
-            fallback = [f"{core_dong} 분위기 맛집", f"{core_gu} 데이트 코스", f"{core_dong} 모임장소"]
+            fallback = [f"{core_dong} 분위기 맛집", f"{core_dong} 데이트", f"{core_dong} 핫플"]
             while len(detail_kws) < 3:
-                detail_kws.append({"relKeyword": fallback[len(detail_kws)], "total_search": "AI 분석", "comp_level": "낮음"})
+                detail_kws.append({"relKeyword": fallback[len(detail_kws)], "total_search": "AI 타겟팅", "comp_level": "낮음"})
                 
             return gold_kws, detail_kws, "success"
         else:
@@ -143,7 +153,7 @@ def generate_ai_content(prompt, api_key):
                 {"role": "system", "content": "당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다. 키워드를 자연스럽고 매력적인 문장으로 녹여냅니다."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.8
+            temperature=0.85
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
@@ -169,7 +179,7 @@ with tab1:
     with st.form("intro_form"):
         c1, c2, c3, c4 = st.columns(4)
         with c1: store = st.text_input("매장명", placeholder="우연희")
-        with c2: reg = st.text_input("지역 (예: 광주 동구 장동)", placeholder="광주 동구 장동")
+        with c2: reg = st.text_input("지역", placeholder="광주 동구 장동")
         with c3: men = st.text_input("주력메뉴", placeholder="육사시미")
         with c4: event = st.text_input("이벤트 (선택)", placeholder="소주 1병 무료")
             
@@ -179,14 +189,20 @@ with tab1:
         if not store or not reg or not men:
             st.error("매장명, 지역, 주력메뉴는 필수 입력입니다!")
         else:
-            with st.spinner("구/동 혼합 알고리즘으로 타겟 키워드를 분석 중입니다..."):
-                g_kws, d_kws, msg = get_naver_golden_keywords(reg, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
+            # 1단계: AI 힌트 분석
+            with st.spinner("1단계: AI가 매장 특성에 맞는 맞춤 검색 트렌드를 분석 중입니다..."):
+                ai_hints = get_ai_dynamic_hints(reg, men, O_API_KEY)
+                st.caption(f"🤖 AI 분석 기초 검색어: `{ai_hints}`") # 화면에 AI가 어떻게 분석했는지 슬쩍 보여줍니다.
+            
+            # 2단계: 네이버 API 검증 및 추출
+            with st.spinner("2단계: 네이버 실제 광고 데이터를 기반으로 최적의 조합을 추출합니다..."):
+                g_kws, d_kws, msg = get_naver_golden_keywords(reg, men, ai_hints, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
                 if g_kws and len(g_kws) > 0:
                     col_a, col_b = st.columns(2)
                     
                     with col_a:
-                        st.subheader("🎯 지역 메인 키워드 5개 (구/동 혼합)")
+                        st.subheader("🎯 지역 메인 키워드 5개")
                         st.markdown(f"**🥇 1위:** `{g_kws[0]['relKeyword']}` (검색량: **{g_kws[0]['total_search']:,}**건)")
                         for kw in g_kws[1:]:
                             st.markdown(f"- `{kw['relKeyword']}` (검색량: {kw['total_search']:,}건)")
@@ -223,7 +239,9 @@ with tab1:
                     6. 세련된 이모티콘 2~3개를 적재적소에 배치하세요.
                     """
                     
-                    intro_res = generate_ai_content(prompt, O_API_KEY)
+                    with st.spinner("3단계: 상위 1% 카피라이팅을 작성 중입니다..."):
+                        intro_res = generate_ai_content(prompt, O_API_KEY)
+                        
                     st.subheader("📝 8대 키워드 최적화 소개글 (복사/붙여넣기용)")
                     st.info(intro_res)
                     st.code(intro_res)
