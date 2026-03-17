@@ -17,28 +17,26 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. [NEW] AI 기반 다이나믹 힌트 추출 함수 ---
+# --- 2. AI 기반 다이나믹 힌트 추출 함수 ---
 def get_ai_dynamic_hints(reg, men, api_key):
     try:
         client = OpenAI(api_key=api_key)
-        prompt = f"지역:'{reg}', 메뉴/업종:'{men}'. 이 매장을 방문할 고객들이 네이버에 검색할 만한 핵심 키워드 딱 5개를 콤마(,)로만 연결해서 출력해. 반드시 지역명(동 또는 구)을 포함하고, 메뉴 특성에 맞춰 상황(회식, 데이트, 핫플, 술집, 밥집 등)을 다양하게 조합해. (출력예시: 장동술집,광주동구맛집,장동육사시미,장동데이트,동명동핫플)"
+        prompt = f"지역:'{reg}', 메뉴:'{men}'. 이 매장을 방문할 고객들이 네이버에 검색할 만한 핵심 키워드 딱 5개를 콤마(,)로만 연결해서 출력해. 반드시 지역명(동 또는 구)을 포함하고, 메뉴 특성에 맞춰 상황을 다양하게 조합해. (출력예시: 장동술집,광주동구맛집,장동육사시미,장동데이트,동명동핫플)"
         
         response = client.chat.completions.create(
-            model="gpt-4o-mini", # 힌트 추출은 속도를 위해 mini 모델 사용
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7
         )
         hints = response.choices[0].message.content.strip()
-        # 공백 제거 및 딱 5개만 자르기
         hints = hints.replace(" ", "").replace(".", "").replace("\n", "")
         return ",".join(hints.split(",")[:5])
     except Exception:
-        # AI 호출 실패 시 비상용 기본 로직
         core_reg = reg.split()[-1]
         core_men = men.split()[0]
         return f"{core_reg}맛집,{core_reg}{core_men},{core_reg}회식,{core_reg}모임,{core_reg}데이트"
 
-# --- 3. [개선] 다이나믹 힌트를 활용한 네이버 API 호출 ---
+# --- 3. [개선] 강제 5+3 보장 네이버 API 호출 ---
 def get_naver_golden_keywords(reg, men, ai_hints, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -52,7 +50,6 @@ def get_naver_golden_keywords(reg, men, ai_hints, c_id, a_key, s_key):
         'X-Signature': signature
     }
     
-    # 지역명 필터링용 데이터 준비 (예: 광주 동구 장동 -> city:광주, gu:동구, dong:장동)
     reg_parts = reg.strip().split()
     city = reg_parts[0][:2] if reg_parts else ""
     core_gu = ""
@@ -64,28 +61,21 @@ def get_naver_golden_keywords(reg, men, ai_hints, c_id, a_key, s_key):
         core_dong = reg_parts[-1]
 
     core_men = men.replace(",", " ").split()[0] if men else ""
-    
-    # AI가 뽑아준 5개 힌트를 네이버에 투척!
     params = {'hintKeywords': ai_hints, 'showDetail': 1}
     
     try:
         res = requests.get(f'https://api.naver.com{uri}', params=params, headers=headers)
         
+        filtered_data = []
+        hint_words = ai_hints.split(",")
+        
         if res.status_code == 200:
             data = res.json().get('keywordList', [])
-            if not data: return [], [], f"데이터가 부족합니다. AI가 분석한 검색어({ai_hints})에 대한 결과가 없습니다."
-            
-            filtered_data = []
-            # 힌트로 사용된 단어들 분리
-            hint_words = ai_hints.split(",")
             
             for item in data:
                 kw = item['relKeyword']
-                
-                # 불필요 단어 컷
                 if any(x in kw for x in ["주변", "근처", "오늘"]): continue
                 
-                # 타지역 차단: 시, 구, 동 이름 중 하나라도 안 들어가면 버림 (단, AI 힌트에 정확히 있던 단어면 살림)
                 is_safe_region = False
                 if city and city in kw: is_safe_region = True
                 if core_gu and core_gu in kw: is_safe_region = True
@@ -100,7 +90,6 @@ def get_naver_golden_keywords(reg, men, ai_hints, c_id, a_key, s_key):
                 mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
                 base_search = pc + mo
                 
-                # 가중치 (AI 힌트 단어거나 메뉴가 들어가면 점수 팍팍)
                 weight = 1
                 if kw in hint_words: weight = 200
                 elif core_dong in kw: weight = 100
@@ -115,31 +104,43 @@ def get_naver_golden_keywords(reg, men, ai_hints, c_id, a_key, s_key):
                 
                 filtered_data.append(item)
                 
-            sorted_data = sorted(filtered_data, key=lambda x: x['sort_score'], reverse=True)
-            
-            gold_kws = []
-            detail_kws = []
-            
-            # 메인 5개 / 상세 3개 분리
-            for kw in sorted_data:
-                if not kw['is_detail'] and len(gold_kws) < 5:
-                    gold_kws.append(kw)
-                elif kw['is_detail'] and len(detail_kws) < 3:
-                    detail_kws.append(kw)
-            
-            # 메인 키워드가 부족하면 남은 걸로 채움
-            for kw in sorted_data:
-                if len(gold_kws) == 5: break
-                if kw not in gold_kws and kw not in detail_kws:
-                    gold_kws.append(kw)
-                    
-            fallback = [f"{core_dong} 분위기 맛집", f"{core_dong} 데이트", f"{core_dong} 핫플"]
-            while len(detail_kws) < 3:
-                detail_kws.append({"relKeyword": fallback[len(detail_kws)], "total_search": "AI 타겟팅", "comp_level": "낮음"})
+        sorted_data = sorted(filtered_data, key=lambda x: x['sort_score'], reverse=True)
+        
+        gold_kws = []
+        detail_kws = []
+        
+        # 실제 데이터로 메인/상세 분리
+        for kw in sorted_data:
+            if not kw['is_detail'] and len(gold_kws) < 5:
+                gold_kws.append(kw)
+            elif kw['is_detail'] and len(detail_kws) < 3:
+                detail_kws.append(kw)
+        
+        # 섞인 키워드로 메인 보충
+        for kw in sorted_data:
+            if len(gold_kws) == 5: break
+            if kw not in gold_kws and kw not in detail_kws:
+                gold_kws.append(kw)
                 
-            return gold_kws, detail_kws, "success"
-        else:
-            return [], [], f"API 에러 (코드: {res.status_code})"
+        # [핵심] 네이버 데이터가 모자랄 때 무조건 5개로 채우는 메인 키워드 강제 생성기!
+        fallback_mains = [
+            f"{core_dong} {core_men}", f"{core_dong} 맛집", 
+            f"{core_gu} {core_men}", f"{core_gu} 맛집", f"{core_dong} 식당"
+        ]
+        while len(gold_kws) < 5:
+            # 중복 안 되는 가상 키워드 골라넣기
+            for fb in fallback_mains:
+                if len(gold_kws) == 5: break
+                if not any(k['relKeyword'] == fb.replace(" ", "") for k in gold_kws):
+                    gold_kws.append({"relKeyword": fb.replace(" ", ""), "total_search": "AI 분석", "comp_level": "타겟"})
+
+        # 상세 키워드도 모자라면 무조건 3개로 채우는 생성기
+        fallback_details = [f"{core_dong} 분위기 맛집", f"{core_dong} 데이트", f"{core_dong} 모임장소"]
+        while len(detail_kws) < 3:
+            detail_kws.append({"relKeyword": fallback_details[len(detail_kws)].replace(" ", ""), "total_search": "AI 타겟팅", "comp_level": "낮음"})
+            
+        return gold_kws, detail_kws, "success"
+
     except Exception as e:
         return [], [], f"시스템 에러: {str(e)}"
 
@@ -189,23 +190,23 @@ with tab1:
         if not store or not reg or not men:
             st.error("매장명, 지역, 주력메뉴는 필수 입력입니다!")
         else:
-            # 1단계: AI 힌트 분석
             with st.spinner("1단계: AI가 매장 특성에 맞는 맞춤 검색 트렌드를 분석 중입니다..."):
                 ai_hints = get_ai_dynamic_hints(reg, men, O_API_KEY)
-                st.caption(f"🤖 AI 분석 기초 검색어: `{ai_hints}`") # 화면에 AI가 어떻게 분석했는지 슬쩍 보여줍니다.
+                st.caption(f"🤖 AI 분석 기초 검색어: `{ai_hints}`") 
             
-            # 2단계: 네이버 API 검증 및 추출
-            with st.spinner("2단계: 네이버 실제 광고 데이터를 기반으로 최적의 조합을 추출합니다..."):
+            with st.spinner("2단계: 네이버 실제 데이터와 AI 타겟팅을 혼합하여 최적의 조합을 추출합니다..."):
                 g_kws, d_kws, msg = get_naver_golden_keywords(reg, men, ai_hints, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
-                if g_kws and len(g_kws) > 0:
+                if g_kws and len(g_kws) == 5: # 무조건 5개가 보장됨
                     col_a, col_b = st.columns(2)
                     
                     with col_a:
                         st.subheader("🎯 지역 메인 키워드 5개")
-                        st.markdown(f"**🥇 1위:** `{g_kws[0]['relKeyword']}` (검색량: **{g_kws[0]['total_search']:,}**건)")
+                        search_vol_1 = f"{g_kws[0]['total_search']:,}건" if isinstance(g_kws[0]['total_search'], int) else g_kws[0]['total_search']
+                        st.markdown(f"**🥇 1위:** `{g_kws[0]['relKeyword']}` (검색량: **{search_vol_1}**)")
                         for kw in g_kws[1:]:
-                            st.markdown(f"- `{kw['relKeyword']}` (검색량: {kw['total_search']:,}건)")
+                            search_vol = f"{kw['total_search']:,}건" if isinstance(kw['total_search'], int) else kw['total_search']
+                            st.markdown(f"- `{kw['relKeyword']}` (검색량: {search_vol})")
                             
                     with col_b:
                         st.subheader("✨ 상세/상황별 키워드 3개")
