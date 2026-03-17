@@ -17,7 +17,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 3. [완벽 개선] 초정밀 지역 타겟팅 키워드 추출 ---
+# --- 3. [개선] 풍성한 황금키워드 추출 로직 ---
 def get_naver_golden_keywords(reg, cat, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -31,12 +31,12 @@ def get_naver_golden_keywords(reg, cat, men, c_id, a_key, s_key):
         'X-Signature': signature
     }
     
-    # 1. 핵심 지역명 추출 (예: 야탑동 -> 야탑, 강남역 -> 강남)
+    # 핵심 지역명 추출 (예: 야탑동 -> 야탑)
     core_reg = reg.replace("동", "").replace("역", "").replace("구", "").replace("시", "")
-    if len(core_reg) < 2: core_reg = reg[:2] # 최소 2글자 방어
+    if len(core_reg) < 2: core_reg = reg[:2]
 
-    # 2. 힌트 키워드를 내 지역 중심으로만 묶음
-    hints = f"{core_reg}{cat},{core_reg}{men},{core_reg}맛집"
+    # [수정] 힌트 키워드를 다채롭게 확장 (회식, 모임, 추천 등 TPO 반영)
+    hints = f"{core_reg}맛집,{core_reg}{cat},{core_reg}회식,{core_reg}모임,{core_reg}데이트"
     params = {'hintKeywords': hints, 'showDetail': 1}
     
     try:
@@ -44,30 +44,26 @@ def get_naver_golden_keywords(reg, cat, men, c_id, a_key, s_key):
         
         if res.status_code == 200:
             data = res.json().get('keywordList', [])
-            if not data:
-                return [], "키워드 데이터가 부족합니다."
+            if not data: return [], "키워드 데이터가 부족합니다."
             
             filtered_data = []
             for item in data:
                 kw = item['relKeyword']
                 
-                # [필터 1] 광범위/타지역 쓰레기 키워드 배제
-                if "주변" in kw or "근처" in kw or "오늘" in kw or "추천" in kw:
-                    continue
-                # [필터 2] '맛집'이 들어갔는데 내 지역명(core_reg)이 없으면 타지역이므로 탈락!
-                if "맛집" in kw and core_reg not in kw:
-                    continue
+                # 타지역 및 불필요한 단어 제거
+                if "주변" in kw or "근처" in kw or "오늘" in kw: continue
+                # 지역명이 안 들어간 '맛집' 키워드 제거 (타지역 방어)
+                if "맛집" in kw and core_reg not in kw: continue
                 
                 pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
                 mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
                 base_search = pc + mo
                 
-                # [필터 3] 내 지역명이 포함된 키워드에 압도적 가중치(x1000) 부여
+                # 가중치 부여: 지역명 + 업종/메뉴 조합이거나 '회식/모임'이 들어가면 점수 폭발
                 weight = 1
-                if core_reg in kw:
-                    weight = 1000
-                elif men in kw or cat in kw:
-                    weight = 10
+                if core_reg in kw: weight = 100
+                if cat in kw or men in kw: weight *= 5
+                if "회식" in kw or "모임" in kw or "룸" in kw: weight *= 3
                 
                 item['total_search'] = base_search
                 item['sort_score'] = base_search * weight
@@ -75,30 +71,21 @@ def get_naver_golden_keywords(reg, cat, men, c_id, a_key, s_key):
                 
                 filtered_data.append(item)
                 
-            # 가중치(sort_score) 기준으로 정렬
             sorted_data = sorted(filtered_data, key=lambda x: x['sort_score'], reverse=True)
             
-            # 최종 5개 세팅 로직
             final_kws = []
             if sorted_data:
-                final_kws.append(sorted_data[0]) # 1위 (압도적 지역+검색량)
-                
-                # 틈새(월간 100~5000건) 우선 추출
-                niche_candidates = [i for i in sorted_data[1:] if 100 <= i['total_search'] <= 5000]
+                final_kws.append(sorted_data[0]) 
+                niche_candidates = [i for i in sorted_data[1:] if 100 <= i['total_search'] <= 8000]
                 for kw in niche_candidates:
                     if kw not in final_kws: final_kws.append(kw)
                     if len(final_kws) == 5: break
-                
-                # 모자라면 남은 것 중 순서대로 강제 채움
                 for kw in sorted_data[1:]:
                     if len(final_kws) == 5: break
                     if kw not in final_kws: final_kws.append(kw)
-                        
             return final_kws, "success"
-            
         else:
             return [], f"API 에러 (코드: {res.status_code})"
-            
     except Exception as e:
         return [], f"시스템 에러: {str(e)}"
 
@@ -107,12 +94,12 @@ def generate_ai_content(prompt, api_key):
     try:
         client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o", # 미니 모델 대신 더 똑똑한 gpt-4o 모델로 변경하여 문장력 극대화
             messages=[
-                {"role": "system", "content": "너는 플레이스 마케팅 카피라이터야."},
+                {"role": "system", "content": "당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다. 키워드를 기계적으로 나열하지 않고 사람의 마음을 움직이는 감성적이고 세련된 후킹 문구를 작성합니다."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.7
+            temperature=0.85 # 창의성을 높여 자연스러운 문맥 유도
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
@@ -139,9 +126,8 @@ with tab1:
         c1, c2, c3, c4 = st.columns(4)
         with c1: store = st.text_input("매장명", placeholder="정가네")
         with c2: reg = st.text_input("지역", placeholder="야탑동")
-        with c3: cat = st.text_input("업종", placeholder="한식")
+        with c3: cat = st.text_input("업종", placeholder="고기집")
         with c4: men = st.text_input("주력메뉴", placeholder="삼겹살")
-        
         submit_intro = st.form_submit_button("최적화 실행")
     
     if submit_intro:
@@ -153,28 +139,27 @@ with tab1:
                 
                 if kws_data and len(kws_data) > 0:
                     st.subheader("🎯 이번 달 황금키워드 5개 조합")
-                    
-                    st.markdown(f"**🥇 1위 메인 키워드:** `{kws_data[0]['relKeyword']}` (검색량: **{kws_data[0]['total_search']:,}**건 / 경쟁도: {kws_data[0]['comp_level']})")
-                    
+                    st.markdown(f"**🥇 1위 메인 키워드:** `{kws_data[0]['relKeyword']}` (검색량: **{kws_data[0]['total_search']:,}**건)")
                     niche_str = ""
                     for kw in kws_data[1:]:
-                        niche_str += f"- `{kw['relKeyword']}` (검색량: {kw['total_search']:,}건 / 경쟁도: {kw['comp_level']})\n"
-                    st.markdown(f"**💡 틈새 키워드 4개:**\n{niche_str}")
-                    
+                        niche_str += f"- `{kw['relKeyword']}` (검색량: {kw['total_search']:,}건)\n"
+                    st.markdown(f"**💡 틈새/TPO 키워드 4개:**\n{niche_str}")
                     st.divider()
                     
                     kw_names = [k['relKeyword'] for k in kws_data]
                     
+                    # [핵심] 프롬프트를 마케팅 전문가 수준으로 대폭 개편
                     prompt = f"""
                     매장명: '{store}'
-                    선정된 핵심키워드 5개: {', '.join(kw_names)}
+                    주력메뉴: '{men}'
+                    선정된 타겟 키워드 5개: {', '.join(kw_names)}
 
-                    [작성 규칙]
-                    1. 위 5개 키워드를 빠짐없이 문장에 자연스럽게 녹여내라.
-                    2. 반드시 '공백 포함 40자~60자 사이'로 짧고 압축적으로 쓸 것.
-                    3. 첫 문장은 '{store}'(매장명)과 1위 키워드('{kw_names[0]}')로 시작할 것.
-                    4. 친근한 이모티콘 1~2개 포함.
-                    5. 인사말 생략, 딱 본문만 출력.
+                    [작성 규칙 - 반드시 지킬 것]
+                    1. 키워드를 절대 단순 나열하지 마세요. (예: "A와 B가 있는 C입니다" 금지)
+                    2. 마치 실제 방문해 본 단골손님이나 센스 있는 사장님이 소개하듯, 물 흐르듯 자연스러운 문맥 안에 5개 키워드를 숨겨두세요.
+                    3. 글자 수는 공백 포함 **100자 ~ 150자 사이**로, 고객이 읽기 편한 2~3문장으로 구성하세요.
+                    4. '육즙', '분위기', '가성비', '친절함' 등 방문 욕구를 자극하는 매력적인 표현을 섞어주세요.
+                    5. 과하지 않은 세련된 이모티콘 2~3개를 적재적소에 배치하세요.
                     """
                     
                     intro_res = generate_ai_content(prompt, O_API_KEY)
