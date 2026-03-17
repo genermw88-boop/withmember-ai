@@ -22,7 +22,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. 네이버 추출 엔진 (5+5 무조건 보장) ---
+# --- 2. [완벽 개선] 타지역 완전 차단 및 네이버 데이터 추출 ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -36,11 +36,19 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         'X-Signature': signature
     }
     
+    # 💡 [핵심] 시/도/구/동 완벽 분리
     reg_parts = reg.strip().split()
+    core_city = ""
     core_gu = ""
     core_dong = ""
+    
+    if reg_parts:
+        # 인천, 서울, 부산 등 맨 앞의 광역 지역명 추출
+        if len(reg_parts[0]) >= 2:
+            core_city = reg_parts[0][:2] 
+            
     for p in reg_parts:
-        if p.endswith('구') or p.endswith('시'): core_gu = p
+        if p.endswith('구') or p.endswith('시') or p.endswith('군'): core_gu = p
         elif any(p.endswith(s) for s in ['동', '역', '읍', '면', '리']): core_dong = p
     
     if not core_gu and not core_dong and reg_parts:
@@ -48,7 +56,7 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
 
     core_men = men.replace(",", " ").split()[0] if men else ""
     
-    hints_list = [f"{core_dong}맛집", f"{core_dong}{core_men}", f"{core_gu}맛집", f"{core_dong}회식", f"{core_dong}데이트"]
+    hints_list = [f"{core_dong}맛집", f"{core_gu}맛집", f"{core_dong}{core_men}", f"{core_dong}회식", f"{core_dong}데이트"]
     params = {'hintKeywords': ",".join(hints_list), 'showDetail': 1}
     
     try:
@@ -58,16 +66,30 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         data = res.json().get('keywordList', [])
         valid_kws = []
         
+        # 대한민국 주요 광역 지역명 (타지역 필터링용)
+        korea_cities = ["서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주"]
+        
         for item in data:
             kw = item['relKeyword']
             if any(x in kw for x in ["주변", "근처", "오늘"]): continue
+            
+            # 🚨 [강력 차단 1] 입력한 지역(core_city)과 다른 시/도 이름이 들어가면 무조건 버림! (예: 인천인데 부산이 들어간 경우)
+            conflict = False
+            if core_city in korea_cities:
+                for city in korea_cities:
+                    if city != core_city and city in kw:
+                        conflict = True
+                        break
+            if conflict: continue
+            
+            # 🚨 [강력 차단 2] 내 동네(동/역)나 구 이름이 둘 다 안 들어가면 버림
             if (core_dong and core_dong not in kw) and (core_gu and core_gu not in kw): continue
             
             pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
             mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
             total_search = pc + mo
             
-            is_detail = any(x in kw for x in [core_men, '회식', '모임', '룸', '데이트', '가족', '핫플', '술집', '카페', '점심', '저녁', '추천', '고기집', '삼겹살'])
+            is_detail = any(x in kw for x in [core_men, '회식', '모임', '룸', '데이트', '가족', '핫플', '술집', '카페', '점심', '저녁', '추천', '고기집', '삼겹살', '마라탕'])
             
             item['total_search'] = total_search
             item['is_detail'] = is_detail
@@ -90,13 +112,14 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             if len(gold_kws) < 5 and kw not in gold_kws and kw not in detail_kws: gold_kws.append(kw)
             if len(detail_kws) < 5 and kw not in gold_kws and kw not in detail_kws: detail_kws.append(kw)
                 
-        fallback_mains = [f"{core_dong}{core_men}", f"{core_dong}맛집", f"{core_gu}{core_men}", f"{core_gu}맛집", f"{core_dong}식당", f"{core_dong}밥집"]
+        # 10개 강제 채우기 보완 로직
+        fallback_mains = [f"{core_dong}맛집", f"{core_dong}{core_men}", f"{core_gu}맛집", f"{core_gu}{core_men}", f"{core_dong}식당"]
         for fb in fallback_mains:
             if len(gold_kws) >= 5: break
             if not any(k['relKeyword'] == fb for k in gold_kws + detail_kws):
                 gold_kws.append({'relKeyword': fb, 'total_search': 10, 'is_detail': False})
 
-        fallback_details = [f"{core_dong}회식", f"{core_dong}데이트", f"{core_dong}모임장소", f"{core_dong}핫플", f"{core_dong}가볼만한곳", f"{core_dong}추천"]
+        fallback_details = [f"{core_dong}회식", f"{core_dong}데이트", f"{core_dong}모임장소", f"{core_dong}핫플", f"{core_dong}추천"]
         for fb in fallback_details:
             if len(detail_kws) >= 5: break
             if not any(k['relKeyword'] == fb for k in gold_kws + detail_kws):
@@ -138,14 +161,14 @@ with st.sidebar:
 
 st.header("📈 위드멤버 플레이스 최적화 시스템")
 
-tab1, tab2 = st.tabs(["🎯 종합 리포트 생성", "💬 방문자 리뷰 답글"])
+tab1, tab2 = st.tabs(["🎯 키워드 & 소개글", "💬 방문자 리뷰 답글"])
 
 with tab1:
     with st.form("intro_form"):
         c1, c2, c3, c4 = st.columns(4)
-        with c1: store = st.text_input("매장명", placeholder="다정푸드 뒤집고")
-        with c2: reg = st.text_input("지역", placeholder="광주 남구 양림동")
-        with c3: men = st.text_input("메뉴", placeholder="꽃삼겹")
+        with c1: store = st.text_input("매장명", placeholder="호원래 마라탕")
+        with c2: reg = st.text_input("지역", placeholder="인천 부평구 부평동")
+        with c3: men = st.text_input("메뉴", placeholder="마라탕")
         with c4: event = st.text_input("이벤트 (선택)", placeholder="소주 1병 무료")
             
         submit_intro = st.form_submit_button("최적화 실행")
@@ -154,11 +177,10 @@ with tab1:
         if not store or not reg or not men:
             st.error("매장명, 지역, 메뉴는 필수 입력입니다!")
         else:
-            with st.spinner("네이버 상권 데이터 수집 및 소개글을 생성 중입니다... (약 10~15초 소요)"):
+            with st.spinner("네이버 상권 데이터 수집 및 소개글을 생성 중입니다... (약 10초 소요)"):
                 g_kws, d_kws, msg = get_naver_real_keywords(store, reg, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
                 if msg == "success":
-                    # 1. 소개글 먼저 생성
                     all_real_kws = [k['relKeyword'] for k in g_kws + d_kws]
                     event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
                     
@@ -177,17 +199,15 @@ with tab1:
                     4. 세련된 이모티콘 2~3개를 배치하세요.
                     """
                     intro_res = generate_ai_content(prompt, O_API_KEY)
-                    
-                    # 소개글 줄바꿈을 HTML 태그로 변환
                     intro_html = intro_res.replace('\n', '<br>')
                     display_event = event if event else "없음"
                     
                     st.divider()
-                    st.subheader("📸 종합 리포트 이미지 다운로드")
                     
-                    # 2. [수정됨] 글씨 크기(18px) 및 굵기 대폭 상향 
-                    gold_li = "".join([f"<li style='padding: 10px 0; border-bottom: 1px dashed #ccc; font-size: 18px; font-weight: bold; color: #2c3e50;'>🥇 {k['relKeyword']} <span style='float:right; font-weight: 800; color:#d32f2f;'>{k['total_search']:,}건</span></li>" for k in g_kws])
-                    detail_li = "".join([f"<li style='padding: 10px 0; border-bottom: 1px dashed #ccc; font-size: 18px; font-weight: bold; color: #2c3e50;'>✔️ {k['relKeyword']} <span style='float:right; font-weight: 800; color:#1976d2;'>{k['total_search']:,}건</span></li>" for k in d_kws])
+                    # --- [수정] 폰트 크기 통일 및 스트림릿 UI와 동일한 디자인 구현 ---
+                    # 키워드와 검색량 span을 모두 font-size: 15px로 완벽히 통일했습니다.
+                    gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #333;'>• {k['relKeyword']}</span> <span style='font-size: 15px; color:#555;'>(검색량: <strong>{k['total_search']:,}건</strong>)</span></li>" for k in g_kws])
+                    detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #333;'>✔️ {k['relKeyword']}</span> <span style='font-size: 15px; color:#555;'>(검색량: <strong>{k['total_search']:,}건</strong>)</span></li>" for k in d_kws])
                     
                     html_content = f"""
                     <!DOCTYPE html>
@@ -196,70 +216,68 @@ with tab1:
                         <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
                         <style>
                             @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-                            body {{ font-family: 'Pretendard', sans-serif; background-color: white; margin: 0; padding: 0; }}
-                            .report-box {{ width: 650px; padding: 30px; background: #ffffff; border: 2px solid #2c3e50; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 8px 16px rgba(0,0,0,0.1); }}
-                            .header {{ text-align: center; margin-bottom: 25px; border-bottom: 2px solid #2c3e50; padding-bottom: 15px; }}
-                            .header h1 {{ color: #2c3e50; margin: 0; font-size: 26px; font-weight: 800; }}
-                            .header p {{ color: #7f8c8d; font-size: 16px; margin-top: 8px; font-weight: 500; }}
+                            body {{ font-family: 'Pretendard', sans-serif; background-color: #ffffff; margin: 0; padding: 0; }}
+                            .report-box {{ width: 100%; max-width: 800px; padding: 20px; background: #ffffff; box-sizing: border-box; }}
                             
-                            .info-box {{ background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; font-size: 16px; color: #34495e; border: 1px solid #e9ecef; }}
-                            .info-box strong {{ color: #2c3e50; }}
+                            .header-title {{ border-bottom: 1px solid #ddd; padding-bottom: 15px; margin-bottom: 20px; }}
+                            .header-title h2 {{ color: #212529; font-size: 24px; margin: 0; display: flex; align-items: center; gap: 8px; }}
                             
-                            .kw-container {{ display: flex; justify-content: space-between; margin-bottom: 25px; }}
-                            .kw-box {{ width: 48%; padding: 15px; border-radius: 8px; }}
-                            .box-main {{ background-color: #fff3e0; border: 1px solid #ffe0b2; }}
-                            .box-detail {{ background-color: #e3f2fd; border: 1px solid #bbdefb; }}
-                            .kw-box h3 {{ margin-top: 0; font-size: 19px; text-align: center; font-weight: 800; margin-bottom: 15px; }}
-                            .box-main h3 {{ color: #e65100; }}
-                            .box-detail h3 {{ color: #0d47a1; }}
+                            .input-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 30px; }}
+                            .input-item label {{ display: block; font-size: 12px; color: #666; margin-bottom: 5px; }}
+                            .input-item div {{ background-color: #f8f9fa; border: 1px solid #eee; padding: 10px; border-radius: 6px; font-size: 14px; color: #333; }}
+                            
+                            .kw-container {{ display: flex; justify-content: space-between; gap: 20px; margin-bottom: 30px; }}
+                            .kw-box {{ flex: 1; }}
+                            .box-title {{ padding: 12px 15px; border-radius: 6px; font-size: 15px; font-weight: bold; margin-bottom: 15px; }}
+                            .title-main {{ background-color: #e8f5e9; color: #2e7d32; }}
+                            .title-detail {{ background-color: #e3f2fd; color: #1565c0; }}
                             ul {{ list-style: none; padding: 0; margin: 0; }}
                             
-                            .intro-box {{ background-color: #f4f6f6; padding: 20px; border-radius: 8px; border-left: 5px solid #1abc9c; font-size: 16px; line-height: 1.6; color: #2c3e50; }}
-                            .intro-box h3 {{ margin-top: 0; font-size: 19px; color: #16a085; margin-bottom: 12px; font-weight: 800; }}
+                            .intro-section h3 {{ font-size: 20px; color: #212529; margin-bottom: 15px; display: flex; align-items: center; gap: 8px; }}
+                            .intro-box {{ background-color: #e3f2fd; padding: 20px; border-radius: 8px; font-size: 15px; line-height: 1.6; color: #333; }}
                             
-                            .btn-down {{ padding: 15px; background-color: #2c3e50; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 18px; font-weight: bold; width: 650px; display: block; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: 0.3s; }}
-                            .btn-down:hover {{ background-color: #1a252f; }}
+                            .btn-down {{ margin-top: 20px; padding: 15px; background-color: #ff4b4b; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: bold; width: 100%; max-width: 800px; text-align: center; transition: 0.2s; }}
+                            .btn-down:hover {{ background-color: #ff3333; }}
                         </style>
                     </head>
                     <body>
                         <div id="capture-area" class="report-box">
-                            <div class="header">
-                                <h1>📈 위드멤버 플레이스 최적화 리포트</h1>
-                                <p>빅데이터 기반 황금 키워드 & AI 카피라이팅 분석 결과</p>
+                            <div class="header-title">
+                                <h2>📈 위드멤버 플레이스 최적화 시스템</h2>
                             </div>
                             
-                            <div class="info-box">
-                                <strong>🏪 매장명:</strong> {store} &nbsp;|&nbsp; 
-                                <strong>📍 지역:</strong> {reg} <br><br>
-                                <strong>🍽️ 메뉴:</strong> {men} &nbsp;|&nbsp; 
-                                <strong>🎁 이벤트:</strong> {display_event}
+                            <div class="input-grid">
+                                <div class="input-item"><label>매장명</label><div>{store}</div></div>
+                                <div class="input-item"><label>지역</label><div>{reg}</div></div>
+                                <div class="input-item"><label>메뉴</label><div>{men}</div></div>
+                                <div class="input-item"><label>이벤트 (선택)</label><div>{display_event}</div></div>
                             </div>
                             
                             <div class="kw-container">
-                                <div class="kw-box box-main">
-                                    <h3>🎯 메인 타겟 키워드</h3>
+                                <div class="kw-box">
+                                    <div class="box-title title-main">🎯 지역 메인 키워드 5개</div>
                                     <ul>{gold_li}</ul>
                                 </div>
-                                <div class="kw-box box-detail">
-                                    <h3>✨ 상세 타겟 키워드</h3>
+                                <div class="kw-box">
+                                    <div class="box-title title-detail">✨ 메뉴 맞춤 상세 키워드 5개</div>
                                     <ul>{detail_li}</ul>
                                 </div>
                             </div>
                             
-                            <div class="intro-box">
-                                <h3>📝 최적화 소개글 (키워드 10개 100% 반영)</h3>
-                                <div>{intro_html}</div>
+                            <div class="intro-section">
+                                <h3>📝 최적화 소개글 (복사/붙여넣기용)</h3>
+                                <div class="intro-box">{intro_html}</div>
                             </div>
                         </div>
                         
-                        <button class="btn-down" onclick="downloadImage()">⬇️ 종합 리포트 이미지 다운로드</button>
+                        <button class="btn-down" onclick="downloadImage()">⬇️ 리포트 화면 이미지로 다운로드</button>
 
                         <script>
                             function downloadImage() {{
                                 const element = document.getElementById('capture-area');
                                 html2canvas(element, {{ scale: 2, backgroundColor: "#ffffff" }}).then(canvas => {{
                                     let link = document.createElement('a');
-                                    link.download = '[위드멤버]_{store}_최적화리포트.png';
+                                    link.download = '{store}_최적화리포트.png';
                                     link.href = canvas.toDataURL('image/png');
                                     link.click();
                                 }});
@@ -269,12 +287,12 @@ with tab1:
                     </html>
                     """
                     
-                    # 폰트가 커진 만큼 화면 잘림 방지를 위해 높이를 950으로 넉넉하게 수정
-                    components.html(html_content, height=950, scrolling=True)
+                    components.html(html_content, height=900, scrolling=True)
                     
-                    st.divider()
-                    st.caption("텍스트 복사용 소개글")
+                    # 텍스트 복사용 UI 추가
+                    st.caption("텍스트 복사용 원본")
                     st.code(intro_res)
+                    
                 else: 
                     st.error(f"오류가 발생했습니다: {msg}")
 
