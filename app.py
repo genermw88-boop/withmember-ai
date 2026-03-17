@@ -17,8 +17,8 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 3. [개선] 풍성한 황금키워드 추출 로직 ---
-def get_naver_golden_keywords(reg, cat, men, c_id, a_key, s_key):
+# --- 3. [수정] 업종을 제외한 황금키워드 추출 로직 ---
+def get_naver_golden_keywords(reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
     timestamp = str(round(time.time() * 1000))
@@ -35,8 +35,8 @@ def get_naver_golden_keywords(reg, cat, men, c_id, a_key, s_key):
     core_reg = reg.replace("동", "").replace("역", "").replace("구", "").replace("시", "")
     if len(core_reg) < 2: core_reg = reg[:2]
 
-    # [수정] 힌트 키워드를 다채롭게 확장 (회식, 모임, 추천 등 TPO 반영)
-    hints = f"{core_reg}맛집,{core_reg}{cat},{core_reg}회식,{core_reg}모임,{core_reg}데이트"
+    # 업종(cat)이 빠진 대신 메뉴(men)와 TPO 키워드를 더 집중적으로 활용합니다.
+    hints = f"{core_reg}맛집,{core_reg}{men},{core_reg}회식,{core_reg}모임,{core_reg}데이트"
     params = {'hintKeywords': hints, 'showDetail': 1}
     
     try:
@@ -52,17 +52,17 @@ def get_naver_golden_keywords(reg, cat, men, c_id, a_key, s_key):
                 
                 # 타지역 및 불필요한 단어 제거
                 if "주변" in kw or "근처" in kw or "오늘" in kw: continue
-                # 지역명이 안 들어간 '맛집' 키워드 제거 (타지역 방어)
+                # 지역명이 안 들어간 '맛집' 키워드 제거
                 if "맛집" in kw and core_reg not in kw: continue
                 
                 pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
                 mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
                 base_search = pc + mo
                 
-                # 가중치 부여: 지역명 + 업종/메뉴 조합이거나 '회식/모임'이 들어가면 점수 폭발
+                # 가중치 부여 (업종 제외, 메뉴 중심)
                 weight = 1
                 if core_reg in kw: weight = 100
-                if cat in kw or men in kw: weight *= 5
+                if men in kw: weight *= 5
                 if "회식" in kw or "모임" in kw or "룸" in kw: weight *= 3
                 
                 item['total_search'] = base_search
@@ -94,12 +94,12 @@ def generate_ai_content(prompt, api_key):
     try:
         client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
-            model="gpt-4o", # 미니 모델 대신 더 똑똑한 gpt-4o 모델로 변경하여 문장력 극대화
+            model="gpt-4o",
             messages=[
-                {"role": "system", "content": "당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다. 키워드를 기계적으로 나열하지 않고 사람의 마음을 움직이는 감성적이고 세련된 후킹 문구를 작성합니다."},
+                {"role": "system", "content": "당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다. 방문자의 마음을 사로잡는 세련되고 감성적인 문구를 작성합니다."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.85 # 창의성을 높여 자연스러운 문맥 유도
+            temperature=0.85
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
@@ -123,19 +123,26 @@ tab1, tab2 = st.tabs(["🎯 황금키워드 & 소개글", "💬 방문자 리뷰
 with tab1:
     st.header("플레이스 최적화 소개글 생성")
     with st.form("intro_form"):
+        # UI 개편: 업종 삭제, 이벤트 추가, 10자 내외 글자수 제한 적용
         c1, c2, c3, c4 = st.columns(4)
-        with c1: store = st.text_input("매장명", placeholder="정가네")
-        with c2: reg = st.text_input("지역", placeholder="야탑동")
-        with c3: cat = st.text_input("업종", placeholder="고기집")
-        with c4: men = st.text_input("주력메뉴", placeholder="삼겹살")
+        with c1: 
+            store = st.text_input("매장명", placeholder="정가네")
+        with c2: 
+            reg = st.text_input("지역 (10자 내외)", max_chars=12, placeholder="야탑동")
+        with c3: 
+            men = st.text_input("주력메뉴 (10자 내외)", max_chars=12, placeholder="삼겹살")
+        with c4: 
+            event = st.text_input("이벤트 (선택/10자)", max_chars=15, placeholder="소주 1병 무료")
+            
         submit_intro = st.form_submit_button("최적화 실행")
     
     if submit_intro:
-        if not store or not reg or not cat:
-            st.error("매장명, 지역, 업종은 필수 입력입니다!")
+        if not store or not reg or not men: # 업종(cat) 조건 삭제
+            st.error("매장명, 지역, 주력메뉴는 필수 입력입니다!")
         else:
             with st.spinner("해당 지역 상권 데이터를 분석 중입니다..."):
-                kws_data, msg = get_naver_golden_keywords(reg, cat, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
+                # 업종 파라미터 제외하고 호출
+                kws_data, msg = get_naver_golden_keywords(reg, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
                 if kws_data and len(kws_data) > 0:
                     st.subheader("🎯 이번 달 황금키워드 5개 조합")
@@ -148,18 +155,24 @@ with tab1:
                     
                     kw_names = [k['relKeyword'] for k in kws_data]
                     
-                    # [핵심] 프롬프트를 마케팅 전문가 수준으로 대폭 개편
+                    # 이벤트 유무에 따른 프롬프트 분기 처리
+                    event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
+                    event_rule = "제공된 이벤트를 고객이 방문하고 싶게끔 매력적이고 자연스럽게 문장에 포함하세요." if event else "이벤트가 없으므로 메뉴와 매장의 매력(맛, 분위기 등)을 강조하는 데 집중하세요."
+
+                    # 맞춤형 카피라이팅 프롬프트
                     prompt = f"""
                     매장명: '{store}'
                     주력메뉴: '{men}'
+                    {event_instruction}
                     선정된 타겟 키워드 5개: {', '.join(kw_names)}
 
                     [작성 규칙 - 반드시 지킬 것]
                     1. 키워드를 절대 단순 나열하지 마세요. (예: "A와 B가 있는 C입니다" 금지)
                     2. 마치 실제 방문해 본 단골손님이나 센스 있는 사장님이 소개하듯, 물 흐르듯 자연스러운 문맥 안에 5개 키워드를 숨겨두세요.
-                    3. 글자 수는 공백 포함 **100자 ~ 150자 사이**로, 고객이 읽기 편한 2~3문장으로 구성하세요.
-                    4. '육즙', '분위기', '가성비', '친절함' 등 방문 욕구를 자극하는 매력적인 표현을 섞어주세요.
-                    5. 과하지 않은 세련된 이모티콘 2~3개를 적재적소에 배치하세요.
+                    3. {event_rule}
+                    4. 글자 수는 공백 포함 **100자 ~ 150자 사이**로, 고객이 읽기 편한 2~3문장으로 구성하세요.
+                    5. '육즙', '분위기', '가성비', '친절함' 등 방문 욕구를 자극하는 표현을 섞어주세요.
+                    6. 과하지 않은 세련된 이모티콘 2~3개를 적재적소에 배치하세요.
                     """
                     
                     intro_res = generate_ai_content(prompt, O_API_KEY)
