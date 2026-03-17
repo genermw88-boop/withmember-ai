@@ -17,7 +17,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 3. [완벽 개선] 구/동 분리 및 상세 키워드 동시 추출 ---
+# --- 3. [오류 완벽 해결] 정직한 지역명 추출 로직 ---
 def get_naver_golden_keywords(reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -31,24 +31,21 @@ def get_naver_golden_keywords(reg, men, c_id, a_key, s_key):
         'X-Signature': signature
     }
     
-    # 1. '구'와 '동'을 분리하여 인식 (예: "광주 동구 동명동" -> gu="동구", dong="동명동")
+    # 1. 띄어쓰기 기준으로 구와 동을 찾습니다. (자르지 않고 원형 보존!)
     reg_parts = reg.strip().split()
-    gu_name = ""
-    dong_name = ""
+    core_gu = ""
+    core_dong = ""
     for p in reg_parts:
-        if p.endswith('구'): gu_name = p
-        elif p.endswith('동') or p.endswith('역'): dong_name = p
+        if p.endswith('구'): core_gu = p        # 예: 동구 (그대로 유지)
+        elif p.endswith('동') or p.endswith('역'): core_dong = p # 예: 장동 (그대로 유지)
         
-    if not gu_name and not dong_name and reg_parts:
-        dong_name = reg_parts[-1] # 구/동 입력이 없으면 마지막 단어 사용
-
-    core_gu = gu_name[:-1] if gu_name else ""
-    core_dong = dong_name[:-1] if dong_name and len(dong_name) >= 2 and dong_name[-1] in ['동','역','구','시'] else dong_name
+    if not core_gu and not core_dong and reg_parts:
+        core_dong = reg_parts[-1] # 구/동이 없으면 마지막 단어 통째로 사용
 
     # 2. 메뉴 정제 (콤마 앞 단어만 힌트로 사용)
     core_men = men.replace(",", " ").split()[0] if men else ""
     
-    # 3. 구와 동을 섞어서 다각도로 네이버에 힌트 투척!
+    # 3. 구와 동을 원형 그대로 네이버에 힌트 투척!
     hints_list = []
     if core_gu: hints_list.extend([f"{core_gu}맛집", f"{core_gu}{core_men}"])
     if core_dong: hints_list.extend([f"{core_dong}맛집", f"{core_dong}{core_men}", f"{core_dong}회식"])
@@ -62,30 +59,26 @@ def get_naver_golden_keywords(reg, men, c_id, a_key, s_key):
         
         if res.status_code == 200:
             data = res.json().get('keywordList', [])
-            if not data: return [], [], "검색량이 부족합니다. 지역/메뉴를 약간 수정해주세요."
+            if not data: return [], [], f"'{core_dong or core_gu}' 관련 검색량이 부족합니다."
             
             filtered_data = []
             for item in data:
                 kw = item['relKeyword']
                 
-                # 불필요 단어 제거
                 if any(x in kw for x in ["주변", "근처", "오늘"]): continue
                 
-                # 내 지역(구 또는 동)이 포함되어 있는지 확인
                 is_gu = bool(core_gu and core_gu in kw)
                 is_dong = bool(core_dong and core_dong in kw)
                 
-                # 타지역 차단: 구, 동 둘 다 해당 안 되면 버림
+                # 구나 동 이름이 명확히 안 들어가면 버림 (타지역 차단)
                 if (core_gu or core_dong) and not (is_gu or is_dong): continue
                 
-                # 상세/상황(TPO) 키워드 여부 판단
                 is_detail = any(x in kw for x in ['회식', '모임', '룸', '데이트', '가족', '외식', '추천', '가성비', '분위기', '점심', '저녁'])
                 
                 pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
                 mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
                 base_search = pc + mo
                 
-                # 가중치 (구, 동 혼합 시 점수 폭발)
                 weight = 1
                 if is_gu and is_dong: weight = 150
                 elif is_dong: weight = 100
@@ -104,39 +97,32 @@ def get_naver_golden_keywords(reg, men, c_id, a_key, s_key):
                 
             sorted_data = sorted(filtered_data, key=lambda x: x['sort_score'], reverse=True)
             
-            # [핵심 로직] 메인 5개(구/동 믹스) + 상세 3개 분리 추출
             gold_kws = []
             detail_kws = []
             
-            # 메인 키워드 5개 채우기
             if sorted_data:
-                gold_kws.append(sorted_data[0]) # 1위 고정
+                gold_kws.append(sorted_data[0]) 
                 
-                # '구' 키워드 최소 1개 확보 시도
                 for kw in sorted_data:
                     if kw['is_gu'] and not kw['is_dong'] and kw not in gold_kws and not kw['is_detail']:
                         gold_kws.append(kw)
                         break
                         
-                # '동' 키워드 최소 1개 확보 시도
                 for kw in sorted_data:
                     if kw['is_dong'] and kw not in gold_kws and not kw['is_detail']:
                         gold_kws.append(kw)
                         break
                         
-                # 나머지 5개까지 순서대로 채움
                 for kw in sorted_data:
                     if len(gold_kws) == 5: break
                     if kw not in gold_kws and not kw['is_detail']:
                         gold_kws.append(kw)
             
-            # 상세/TPO 키워드 3개 채우기
             for kw in sorted_data:
                 if len(detail_kws) == 3: break
                 if kw['is_detail'] and kw not in gold_kws:
                     detail_kws.append(kw)
                     
-            # 만약 네이버 API에 상세 키워드가 부족하면 AI가 활용할 수 있게 가상 키워드 부여
             fallback = [f"{core_dong} 분위기 맛집", f"{core_gu} 데이트 코스", f"{core_dong} 모임장소"]
             while len(detail_kws) < 3:
                 detail_kws.append({"relKeyword": fallback[len(detail_kws)], "total_search": "AI 분석", "comp_level": "낮음"})
@@ -154,7 +140,7 @@ def generate_ai_content(prompt, api_key):
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다. 키워드를 기계적으로 나열하지 않고, 물 흐르듯 자연스럽고 매력적인 문장을 씁니다."},
+                {"role": "system", "content": "당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다. 키워드를 자연스럽고 매력적인 문장으로 녹여냅니다."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.8
@@ -183,7 +169,7 @@ with tab1:
     with st.form("intro_form"):
         c1, c2, c3, c4 = st.columns(4)
         with c1: store = st.text_input("매장명", placeholder="우연희")
-        with c2: reg = st.text_input("지역 (예: 광주 동구 동명동)", placeholder="광주 동구 동명동")
+        with c2: reg = st.text_input("지역 (예: 광주 동구 장동)", placeholder="광주 동구 장동")
         with c3: men = st.text_input("주력메뉴", placeholder="육사시미")
         with c4: event = st.text_input("이벤트 (선택)", placeholder="소주 1병 무료")
             
@@ -219,7 +205,6 @@ with tab1:
                     event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
                     event_rule = "제공된 이벤트를 고객이 방문하고 싶게끔 매력적이고 자연스럽게 문장에 포함하세요." if event else "이벤트가 없으므로 메뉴와 매장의 매력(맛, 분위기 등)을 강조하는 데 집중하세요."
 
-                    # 키워드가 많아졌으므로 글자 수를 약간 늘려 부드럽게 쓰도록 유도
                     prompt = f"""
                     매장명: '{store}'
                     주력메뉴: '{men}'
@@ -233,7 +218,7 @@ with tab1:
                     1. 위 8개의 키워드를 빠짐없이 문장에 자연스럽게 모두 녹여내세요. (키워드 단순 억지 나열 절대 금지)
                     2. 마치 인스타그램 감성 맛집이나 유명 블로거가 소개하듯, 물 흐르듯 자연스러운 문맥을 만들어주세요.
                     3. {event_rule}
-                    4. 글자 수는 공백 포함 **130자 ~ 180자 사이**(약 3~4문장)로, 너무 짧지도 길지도 않게 구성하세요.
+                    4. 글자 수는 공백 포함 **130자 ~ 180자 사이**(약 3~4문장)로 구성하세요.
                     5. '육즙', '프라이빗', '가성비', '친절함' 등 방문 욕구를 자극하는 표현을 섞어주세요.
                     6. 세련된 이모티콘 2~3개를 적재적소에 배치하세요.
                     """
