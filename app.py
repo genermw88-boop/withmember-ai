@@ -17,7 +17,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 3. [수정] 업종을 제외한 황금키워드 추출 로직 ---
+# --- 3. [공백 완벽 제거] 황금키워드 추출 로직 ---
 def get_naver_golden_keywords(reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -31,20 +31,27 @@ def get_naver_golden_keywords(reg, men, c_id, a_key, s_key):
         'X-Signature': signature
     }
     
-    # 핵심 지역명 추출 (예: 야탑동 -> 야탑)
-    core_reg = reg.replace("동", "").replace("역", "").replace("구", "").replace("시", "")
-    if len(core_reg) < 2: core_reg = reg[:2]
+    # [핵심 수정] 띄어쓰기를 원천적으로 모두 제거합니다. (예: "광주 월계동" -> "광주월계동")
+    clean_reg = reg.replace(" ", "")
+    clean_men = men.replace(" ", "")
+    
+    # 동/역/구/시 제거하여 핵심 지역명 추출 (예: "광주월계동" -> "광주월계")
+    core_reg = clean_reg.replace("동", "").replace("역", "").replace("구", "").replace("시", "")
+    if len(core_reg) < 2: core_reg = clean_reg[:2] # 만약 한 글자만 남으면 방어
 
-    # 업종(cat)이 빠진 대신 메뉴(men)와 TPO 키워드를 더 집중적으로 활용합니다.
-    hints = f"{core_reg}맛집,{core_reg}{men},{core_reg}회식,{core_reg}모임,{core_reg}데이트"
-    params = {'hintKeywords': hints, 'showDetail': 1}
+    # 네이버에 던질 5가지 힌트 키워드 세팅
+    hints = f"{core_reg}맛집,{core_reg}{clean_men},{core_reg}회식,{core_reg}모임,{core_reg}데이트"
+    
+    # 만약의 사태를 대비해 최종 힌트에서도 공백 완벽 제거
+    safe_hints = hints.replace(" ", "")
+    params = {'hintKeywords': safe_hints, 'showDetail': 1}
     
     try:
         res = requests.get(f'https://api.naver.com{uri}', params=params, headers=headers)
         
         if res.status_code == 200:
             data = res.json().get('keywordList', [])
-            if not data: return [], "키워드 데이터가 부족합니다."
+            if not data: return [], "키워드 데이터가 부족합니다. 다른 키워드로 시도해보세요."
             
             filtered_data = []
             for item in data:
@@ -59,10 +66,10 @@ def get_naver_golden_keywords(reg, men, c_id, a_key, s_key):
                 mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
                 base_search = pc + mo
                 
-                # 가중치 부여 (업종 제외, 메뉴 중심)
+                # 가중치 부여 (지역명 및 메뉴 중심)
                 weight = 1
                 if core_reg in kw: weight = 100
-                if men in kw: weight *= 5
+                if clean_men in kw: weight *= 5
                 if "회식" in kw or "모임" in kw or "룸" in kw: weight *= 3
                 
                 item['total_search'] = base_search
@@ -123,25 +130,23 @@ tab1, tab2 = st.tabs(["🎯 황금키워드 & 소개글", "💬 방문자 리뷰
 with tab1:
     st.header("플레이스 최적화 소개글 생성")
     with st.form("intro_form"):
-        # UI 개편: 업종 삭제, 이벤트 추가, 10자 내외 글자수 제한 적용
         c1, c2, c3, c4 = st.columns(4)
         with c1: 
-            store = st.text_input("매장명", placeholder="정가네")
+            store = st.text_input("매장명", placeholder="우연희")
         with c2: 
-            reg = st.text_input("지역 (10자 내외)", max_chars=12, placeholder="야탑동")
+            reg = st.text_input("지역 (10자 내외)", max_chars=12, placeholder="광주 월계동")
         with c3: 
-            men = st.text_input("주력메뉴 (10자 내외)", max_chars=12, placeholder="삼겹살")
+            men = st.text_input("주력메뉴 (10자 내외)", max_chars=12, placeholder="육사시미")
         with c4: 
             event = st.text_input("이벤트 (선택/10자)", max_chars=15, placeholder="소주 1병 무료")
             
         submit_intro = st.form_submit_button("최적화 실행")
     
     if submit_intro:
-        if not store or not reg or not men: # 업종(cat) 조건 삭제
+        if not store or not reg or not men:
             st.error("매장명, 지역, 주력메뉴는 필수 입력입니다!")
         else:
             with st.spinner("해당 지역 상권 데이터를 분석 중입니다..."):
-                # 업종 파라미터 제외하고 호출
                 kws_data, msg = get_naver_golden_keywords(reg, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
                 if kws_data and len(kws_data) > 0:
@@ -155,11 +160,9 @@ with tab1:
                     
                     kw_names = [k['relKeyword'] for k in kws_data]
                     
-                    # 이벤트 유무에 따른 프롬프트 분기 처리
                     event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
                     event_rule = "제공된 이벤트를 고객이 방문하고 싶게끔 매력적이고 자연스럽게 문장에 포함하세요." if event else "이벤트가 없으므로 메뉴와 매장의 매력(맛, 분위기 등)을 강조하는 데 집중하세요."
 
-                    # 맞춤형 카피라이팅 프롬프트
                     prompt = f"""
                     매장명: '{store}'
                     주력메뉴: '{men}'
