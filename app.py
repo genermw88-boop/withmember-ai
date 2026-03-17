@@ -22,7 +22,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. [완벽 개선] 타지역 완전 차단 및 네이버 데이터 추출 ---
+# --- 2. 네이버 실제 데이터 추출 엔진 ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -36,14 +36,12 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         'X-Signature': signature
     }
     
-    # 💡 [핵심] 시/도/구/동 완벽 분리
     reg_parts = reg.strip().split()
     core_city = ""
     core_gu = ""
     core_dong = ""
     
     if reg_parts:
-        # 인천, 서울, 부산 등 맨 앞의 광역 지역명 추출
         if len(reg_parts[0]) >= 2:
             core_city = reg_parts[0][:2] 
             
@@ -66,14 +64,12 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         data = res.json().get('keywordList', [])
         valid_kws = []
         
-        # 대한민국 주요 광역 지역명 (타지역 필터링용)
         korea_cities = ["서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주"]
         
         for item in data:
             kw = item['relKeyword']
             if any(x in kw for x in ["주변", "근처", "오늘"]): continue
             
-            # 🚨 [강력 차단 1] 입력한 지역(core_city)과 다른 시/도 이름이 들어가면 무조건 버림! (예: 인천인데 부산이 들어간 경우)
             conflict = False
             if core_city in korea_cities:
                 for city in korea_cities:
@@ -82,7 +78,6 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                         break
             if conflict: continue
             
-            # 🚨 [강력 차단 2] 내 동네(동/역)나 구 이름이 둘 다 안 들어가면 버림
             if (core_dong and core_dong not in kw) and (core_gu and core_gu not in kw): continue
             
             pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
@@ -112,7 +107,6 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             if len(gold_kws) < 5 and kw not in gold_kws and kw not in detail_kws: gold_kws.append(kw)
             if len(detail_kws) < 5 and kw not in gold_kws and kw not in detail_kws: detail_kws.append(kw)
                 
-        # 10개 강제 채우기 보완 로직
         fallback_mains = [f"{core_dong}맛집", f"{core_dong}{core_men}", f"{core_gu}맛집", f"{core_gu}{core_men}", f"{core_dong}식당"]
         for fb in fallback_mains:
             if len(gold_kws) >= 5: break
@@ -146,22 +140,22 @@ def generate_ai_content(prompt, api_key):
     except Exception as e:
         return f"생성 실패: {str(e)}"
 
-# --- 4. Streamlit UI ---
-st.set_page_config(page_title="위드멤버 플레이스 최적화", page_icon="🚀", layout="wide")
+# --- 4. Streamlit UI (이모티콘 완벽 제거) ---
+st.set_page_config(page_title="위드멤버 플레이스 최적화", layout="wide")
 
 with st.sidebar:
-    st.title("🔑 API 설정")
+    st.title("API 설정")
     if not (N_API_KEY and N_SECRET_KEY and O_API_KEY):
         st.warning("Secrets를 설정하거나 직접 입력하세요.")
         N_API_KEY = st.text_input("Naver API KEY", type="password")
         N_SECRET_KEY = st.text_input("Naver SECRET KEY", type="password")
         O_API_KEY = st.text_input("OpenAI API KEY", type="password")
     else:
-        st.success("API 연결 완료! 자동 모드 ✅")
+        st.success("API 연결 완료! 자동 모드")
 
-st.header("📈 위드멤버 플레이스 최적화 시스템")
+st.header("위드멤버 플레이스 최적화 시스템")
 
-tab1, tab2 = st.tabs(["🎯 키워드 & 소개글", "💬 방문자 리뷰 답글"])
+tab1, tab2 = st.tabs(["키워드 & 소개글", "방문자 리뷰 답글"])
 
 with tab1:
     with st.form("intro_form"):
@@ -184,6 +178,7 @@ with tab1:
                     all_real_kws = [k['relKeyword'] for k in g_kws + d_kws]
                     event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
                     
+                    # 프롬프트에는 여전히 이모티콘 추가 명령 유지
                     prompt = f"""
                     매장명: '{store}'
                     주력메뉴: '{men}'
@@ -204,10 +199,9 @@ with tab1:
                     
                     st.divider()
                     
-                    # --- [수정] 폰트 크기 통일 및 스트림릿 UI와 동일한 디자인 구현 ---
-                    # 키워드와 검색량 span을 모두 font-size: 15px로 완벽히 통일했습니다.
+                    # HTML 리포트 디자인 (이모티콘 제거 및 심플한 기호 사용)
                     gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #333;'>• {k['relKeyword']}</span> <span style='font-size: 15px; color:#555;'>(검색량: <strong>{k['total_search']:,}건</strong>)</span></li>" for k in g_kws])
-                    detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #333;'>✔️ {k['relKeyword']}</span> <span style='font-size: 15px; color:#555;'>(검색량: <strong>{k['total_search']:,}건</strong>)</span></li>" for k in d_kws])
+                    detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #333;'>- {k['relKeyword']}</span> <span style='font-size: 15px; color:#555;'>(검색량: <strong>{k['total_search']:,}건</strong>)</span></li>" for k in d_kws])
                     
                     html_content = f"""
                     <!DOCTYPE html>
@@ -229,21 +223,21 @@ with tab1:
                             .kw-container {{ display: flex; justify-content: space-between; gap: 20px; margin-bottom: 30px; }}
                             .kw-box {{ flex: 1; }}
                             .box-title {{ padding: 12px 15px; border-radius: 6px; font-size: 15px; font-weight: bold; margin-bottom: 15px; }}
-                            .title-main {{ background-color: #e8f5e9; color: #2e7d32; }}
-                            .title-detail {{ background-color: #e3f2fd; color: #1565c0; }}
+                            .title-main {{ background-color: #f8f9fa; border: 1px solid #ddd; color: #333; }}
+                            .title-detail {{ background-color: #f8f9fa; border: 1px solid #ddd; color: #333; }}
                             ul {{ list-style: none; padding: 0; margin: 0; }}
                             
                             .intro-section h3 {{ font-size: 20px; color: #212529; margin-bottom: 15px; display: flex; align-items: center; gap: 8px; }}
-                            .intro-box {{ background-color: #e3f2fd; padding: 20px; border-radius: 8px; font-size: 15px; line-height: 1.6; color: #333; }}
+                            .intro-box {{ background-color: #f8f9fa; padding: 20px; border-radius: 8px; border: 1px solid #ddd; font-size: 15px; line-height: 1.6; color: #333; }}
                             
-                            .btn-down {{ margin-top: 20px; padding: 15px; background-color: #ff4b4b; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: bold; width: 100%; max-width: 800px; text-align: center; transition: 0.2s; }}
-                            .btn-down:hover {{ background-color: #ff3333; }}
+                            .btn-down {{ margin-top: 20px; padding: 15px; background-color: #495057; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: bold; width: 100%; max-width: 800px; text-align: center; transition: 0.2s; }}
+                            .btn-down:hover {{ background-color: #343a40; }}
                         </style>
                     </head>
                     <body>
                         <div id="capture-area" class="report-box">
                             <div class="header-title">
-                                <h2>📈 위드멤버 플레이스 최적화 시스템</h2>
+                                <h2>위드멤버 플레이스 최적화 시스템</h2>
                             </div>
                             
                             <div class="input-grid">
@@ -255,22 +249,22 @@ with tab1:
                             
                             <div class="kw-container">
                                 <div class="kw-box">
-                                    <div class="box-title title-main">🎯 지역 메인 키워드 5개</div>
+                                    <div class="box-title title-main">지역 메인 키워드 5개</div>
                                     <ul>{gold_li}</ul>
                                 </div>
                                 <div class="kw-box">
-                                    <div class="box-title title-detail">✨ 메뉴 맞춤 상세 키워드 5개</div>
+                                    <div class="box-title title-detail">메뉴 맞춤 상세 키워드 5개</div>
                                     <ul>{detail_li}</ul>
                                 </div>
                             </div>
                             
                             <div class="intro-section">
-                                <h3>📝 최적화 소개글 (복사/붙여넣기용)</h3>
+                                <h3>최적화 소개글 (복사/붙여넣기용)</h3>
                                 <div class="intro-box">{intro_html}</div>
                             </div>
                         </div>
                         
-                        <button class="btn-down" onclick="downloadImage()">⬇️ 리포트 화면 이미지로 다운로드</button>
+                        <button class="btn-down" onclick="downloadImage()">리포트 화면 이미지로 다운로드</button>
 
                         <script>
                             function downloadImage() {{
@@ -289,7 +283,6 @@ with tab1:
                     
                     components.html(html_content, height=900, scrolling=True)
                     
-                    # 텍스트 복사용 UI 추가
                     st.caption("텍스트 복사용 원본")
                     st.code(intro_res)
                     
@@ -297,7 +290,7 @@ with tab1:
                     st.error(f"오류가 발생했습니다: {msg}")
 
 with tab2:
-    st.header("💬 방문자 리뷰 답글 생성기")
+    st.header("방문자 리뷰 답글 생성기")
     with st.form("review_form"):
         review_content = st.text_area("손님이 남긴 리뷰 내용을 입력하세요")
         submit_review = st.form_submit_button("답글 생성")
@@ -307,6 +300,7 @@ with tab2:
             st.warning("리뷰 내용을 입력해주세요!")
         else:
             with st.spinner("정성스러운 답글을 작성 중..."):
+                # 리뷰 답글에도 이모티콘 추가 명령 유지
                 prompt = f"다음 손님의 리뷰에 대해 친절하고 감사해하는 사장님 톤으로 답글을 써줘. 친근한 이모티콘 듬뿍 써줘. 리뷰내용: {review_content}"
                 review_res = generate_ai_content(prompt, O_API_KEY)
                 st.success("작성된 답글:")
