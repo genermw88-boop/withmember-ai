@@ -22,7 +22,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. 네이버 실제 데이터 추출 엔진 ---
+# --- 2. 네이버 추출 엔진 (엉뚱한 메뉴 차단 강화) ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -52,9 +52,10 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     if not core_gu and not core_dong and reg_parts:
         core_dong = reg_parts[-1]
 
-    core_men = men.replace(",", " ").split()[0] if men else ""
+    core_men_list = men.replace(",", " ").split()
+    core_men = core_men_list[0] if core_men_list else ""
     
-    hints_list = [f"{core_dong}맛집", f"{core_gu}맛집", f"{core_dong}{core_men}", f"{core_dong}회식", f"{core_dong}데이트"]
+    hints_list = [f"{core_dong}맛집", f"{core_gu}맛집", f"{core_dong}{core_men}", f"{core_dong}데이트", f"{core_dong}가볼만한곳"]
     params = {'hintKeywords': ",".join(hints_list), 'showDetail': 1}
     
     try:
@@ -66,10 +67,25 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         
         korea_cities = ["서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주"]
         
+        # 🚨 [새로운 핵심 필터] 타 업종 메뉴 블랙리스트
+        stop_foods = ['삼겹살', '돼지갈비', '김치찌개', '횟집', '회', '국밥', '마라탕', '치킨', '피자', '중국집', '짜장면', '짬뽕', '초밥', '스시', '떡볶이', '한정식', '백반', '칼국수', '냉면', '족발', '보쌈', '곱창', '막창', '닭갈비', '고기집', '소고기', '한우', '돈까스', '파스타', '스테이크', '브런치', '카페', '디저트']
+        
+        # 입력한 메뉴와 관련된 단어는 블랙리스트에서 제외 (살려둠)
+        blacklist = []
+        for sf in stop_foods:
+            is_safe = False
+            for m in core_men_list:
+                if m in sf or sf in m:  # 예: 입력이 '삼겹'이면 '삼겹살'은 허용
+                    is_safe = True
+                    break
+            if not is_safe:
+                blacklist.append(sf)
+                
         for item in data:
             kw = item['relKeyword']
-            if any(x in kw for x in ["주변", "근처", "오늘"]): continue
+            if any(x in kw for x in ["주변", "근처", "오늘", "배달"]): continue
             
+            # 지역 충돌 방지
             conflict = False
             if core_city in korea_cities:
                 for city in korea_cities:
@@ -78,13 +94,17 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                         break
             if conflict: continue
             
+            # 타지역 차단
             if (core_dong and core_dong not in kw) and (core_gu and core_gu not in kw): continue
+            
+            # 🚨 엉뚱한 메뉴(횟집, 삼겹살 등) 완벽 차단
+            if any(b in kw for b in blacklist): continue
             
             pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
             mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
             total_search = pc + mo
             
-            is_detail = any(x in kw for x in [core_men, '회식', '모임', '룸', '데이트', '가족', '핫플', '술집', '카페', '점심', '저녁', '추천', '고기집', '삼겹살', '마라탕'])
+            is_detail = any(x in kw for x in core_men_list + ['회식', '모임', '룸', '데이트', '가족', '핫플', '술집', '카페', '점심', '저녁', '추천', '분위기'])
             
             item['total_search'] = total_search
             item['is_detail'] = is_detail
@@ -107,13 +127,14 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             if len(gold_kws) < 5 and kw not in gold_kws and kw not in detail_kws: gold_kws.append(kw)
             if len(detail_kws) < 5 and kw not in gold_kws and kw not in detail_kws: detail_kws.append(kw)
                 
+        # 대체 생성 키워드도 입력된 메뉴 기반으로만 생성
         fallback_mains = [f"{core_dong}맛집", f"{core_dong}{core_men}", f"{core_gu}맛집", f"{core_gu}{core_men}", f"{core_dong}식당"]
         for fb in fallback_mains:
             if len(gold_kws) >= 5: break
             if not any(k['relKeyword'] == fb for k in gold_kws + detail_kws):
                 gold_kws.append({'relKeyword': fb, 'total_search': 10, 'is_detail': False})
 
-        fallback_details = [f"{core_dong}회식", f"{core_dong}데이트", f"{core_dong}모임장소", f"{core_dong}핫플", f"{core_dong}추천"]
+        fallback_details = [f"{core_dong}데이트", f"{core_dong}모임장소", f"{core_dong}핫플", f"{core_dong}분위기", f"{core_dong}추천"]
         for fb in fallback_details:
             if len(detail_kws) >= 5: break
             if not any(k['relKeyword'] == fb for k in gold_kws + detail_kws):
@@ -160,10 +181,10 @@ tab1, tab2 = st.tabs(["키워드 & 소개글", "방문자 리뷰 답글"])
 with tab1:
     with st.form("intro_form"):
         c1, c2, c3, c4 = st.columns(4)
-        with c1: store = st.text_input("매장명", placeholder="호원래 마라탕")
-        with c2: reg = st.text_input("지역", placeholder="인천 부평구 부평동")
-        with c3: men = st.text_input("메뉴", placeholder="마라탕")
-        with c4: event = st.text_input("이벤트 (선택)", placeholder="소주 1병 무료")
+        with c1: store = st.text_input("매장명", placeholder="로얄경양식&스테이크")
+        with c2: reg = st.text_input("지역", placeholder="부산 수영구 민락동")
+        with c3: men = st.text_input("메뉴", placeholder="스테이크 돈까스 파스타")
+        with c4: event = st.text_input("이벤트 (선택)", placeholder="음료 제공")
             
         submit_intro = st.form_submit_button("최적화 실행")
     
@@ -178,7 +199,6 @@ with tab1:
                     all_real_kws = [k['relKeyword'] for k in g_kws + d_kws]
                     event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
                     
-                    # 💡 [핵심] 엉뚱한 지역/메뉴 및 해시태그 생성 절대 금지
                     prompt = f"""
                     매장명: '{store}'
                     지역: '{reg}'
@@ -193,7 +213,7 @@ with tab1:
                     2. 인스타그램 감성 맛집 블로거처럼 물 흐르듯 자연스럽게 작성하세요.
                     3. 글자 수는 공백 포함 150자 ~ 200자 사이로 넉넉하게 구성하세요.
                     4. 세련된 이모티콘 2~3개를 배치하세요.
-                    5. [강력 경고] 제공된 지역('{reg}')과 메뉴('{men}') 외에 다른 지역명(예: 서울, 강남 등)이나 엉뚱한 메뉴는 절대 지어내서 적지 마세요.
+                    5. [강력 경고] 제공된 지역('{reg}')과 메뉴('{men}') 외에 다른 지역명이나 엉뚱한 메뉴는 절대 지어내서 적지 마세요.
                     6. [강력 경고] 글 마지막에 해시태그(#)를 달거나, 추천 키워드 목록을 따로 출력하지 마세요. 오직 소개글 본문 텍스트만 작성하세요.
                     """
                     intro_res = generate_ai_content(prompt, O_API_KEY)
@@ -294,7 +314,6 @@ with tab1:
 with tab2:
     st.header("방문자 리뷰 답글 생성기")
     with st.form("review_form"):
-        # 💡 [원상복구] 리뷰 탭은 깔끔하게 리뷰 입력창만 남겨두었습니다.
         review_content = st.text_area("손님이 남긴 리뷰 내용을 입력하세요")
         submit_review = st.form_submit_button("답글 생성")
     
@@ -303,7 +322,6 @@ with tab2:
             st.warning("리뷰 내용을 입력해주세요!")
         else:
             with st.spinner("정성스러운 답글을 작성 중..."):
-                # 리뷰 답글에도 해시태그 생성 방지 추가
                 prompt = f"다음 손님의 리뷰에 대해 친절하고 감사해하는 사장님 톤으로 답글을 써줘. 친근한 이모티콘 듬뿍 써줘. [절대 금지] 글 마지막에 해시태그(#)를 달거나 키워드를 따로 나열하지 마세요. 오직 답글 본문만 작성하세요. 리뷰내용: {review_content}"
                 review_res = generate_ai_content(prompt, O_API_KEY)
                 st.success("작성된 답글:")
