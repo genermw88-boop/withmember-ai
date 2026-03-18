@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import time
 import hashlib
 import hmac
@@ -21,7 +22,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. [개선] 3단 탄력 필터가 적용된 네이버 추출 엔진 ---
+# --- 2. [가장 강력한 필터] 네이버 데이터 추출 엔진 ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -35,21 +36,23 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         'X-Signature': signature
     }
     
-    # 동/구 분리 및 메뉴 정제
     reg_parts = reg.strip().split()
-    core_gu = ""
-    core_dong = ""
-    for p in reg_parts:
-        if p.endswith('구') or p.endswith('시'): core_gu = p
-        elif any(p.endswith(s) for s in ['동', '역', '읍', '면', '리']): core_dong = p
-    
-    if not core_gu and not core_dong and reg_parts:
-        core_dong = reg_parts[-1]
+    if not reg_parts:
+        return [], [], "지역명을 올바르게 입력해주세요."
 
-    core_men = men.replace(",", " ").split()[0] if men else ""
+    # 💡 [핵심 1] 입력된 마지막 단어를 '핵심 타겟 지역'으로 절대 지정 (도로명, 관광지 모두 호환)
+    core_loc = reg_parts[-1]
     
-    # 힌트를 가장 광범위하고 정확하게 세팅 (여기서 수백 개를 확보해야 10개를 골라낼 수 있습니다)
-    hints_list = [f"{core_dong}맛집", f"{core_dong}{core_men}", f"{core_gu}맛집", f"{core_dong}회식", f"{core_dong}데이트"]
+    # "민락동" -> "민락", "강남역" -> "강남" 등으로 정제하여 호환성 극대화 (가로수길, 반야월 등은 그대로 유지)
+    core_loc_clean = core_loc
+    if len(core_loc) >= 2 and core_loc[-1] in ['동', '역', '읍', '면', '리']:
+        core_loc_clean = core_loc[:-1]
+
+    core_men_list = men.replace(",", " ").split()
+    core_men = core_men_list[0] if core_men_list else ""
+    
+    # 힌트를 오직 '핵심 타겟 지역'으로만 좁혀서 다른 동네 데이터가 끼어들지 못하게 차단
+    hints_list = [f"{core_loc_clean}맛집", f"{core_loc_clean}{core_men}", f"{core_loc_clean}데이트", f"{core_loc_clean}핫플", f"{core_loc_clean}가볼만한곳"]
     params = {'hintKeywords': ",".join(hints_list), 'showDetail': 1}
     
     try:
@@ -59,31 +62,41 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         data = res.json().get('keywordList', [])
         valid_kws = []
         
+        # 💡 [핵심 2] 엉뚱한 타 업종 메뉴 블랙리스트 
+        stop_foods = [
+            '삼겹살', '돼지갈비', '갈비', '김치찌개', '된장찌개', '횟집', '회', '국밥', '해장국', '마라탕', 
+            '치킨', '피자', '중국집', '짜장면', '짬뽕', '초밥', '스시', '떡볶이', '한정식', '백반', 
+            '칼국수', '냉면', '밀면', '족발', '보쌈', '곱창', '막창', '대창', '닭갈비', '고기집', 
+            '소고기', '한우', '돈까스', '돈가스', '파스타', '스테이크', '브런치', '카페', '디저트', '술집'
+        ]
+        
+        # 입력한 메뉴에 해당하는 단어는 블랙리스트에서 구출
+        blacklist = [sf for sf in stop_foods if not any(m in sf or sf in m for m in core_men_list)]
+        
         for item in data:
             kw = item['relKeyword']
-            if any(x in kw for x in ["주변", "근처", "오늘"]): continue
+            if any(x in kw for x in ["주변", "근처", "오늘", "배달"]): continue
             
-            # 타지역 차단 (내 동네나 구 이름이 없으면 가차없이 버림)
-            if (core_dong and core_dong not in kw) and (core_gu and core_gu not in kw): 
+            # 🚨 [절대 규칙 1] 정제된 핵심 지역명(예: '민락', '반야월')이 키워드에 없으면 무조건 버림!
+            if core_loc_clean not in kw: 
+                continue
+            
+            # 🚨 [절대 규칙 2] 메뉴 블랙리스트에 걸리면 가차 없이 버림! (파스타 집에 김치찌개 차단)
+            if any(b in kw for b in blacklist): 
                 continue
             
             pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
             mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
             total_search = pc + mo
             
-            # 메뉴명, 특정 상황이 들어가면 상세 키워드로 분류
-            is_detail = any(x in kw for x in [core_men, '회식', '모임', '룸', '데이트', '가족', '핫플', '술집', '카페', '점심', '저녁', '추천', '고기집', '삼겹살'])
+            is_detail = any(x in kw for x in core_men_list + ['회식', '모임', '룸', '데이트', '가족', '핫플', '카페', '점심', '저녁', '추천', '분위기'])
             
             item['total_search'] = total_search
             item['is_detail'] = is_detail
             valid_kws.append(item)
                 
-        # 💡 [핵심] 유연한 3단 필터 로직
-        # 1순위: 100 ~ 1000건 (가장 완벽한 타겟)
         tier1 = sorted([k for k in valid_kws if 100 <= k['total_search'] <= 1000], key=lambda x: x['total_search'], reverse=True)
-        # 2순위: 50 ~ 3000건 (1순위가 부족할 때만 가져오는 예비군)
         tier2 = sorted([k for k in valid_kws if (50 <= k['total_search'] <= 3000) and (k not in tier1)], key=lambda x: x['total_search'], reverse=True)
-        # 3순위: 그 외 내 동네 실제 키워드 (진짜 데이터가 씨가 말랐을 때 최후의 보루)
         tier3 = sorted([k for k in valid_kws if k not in tier1 and k not in tier2], key=lambda x: x['total_search'], reverse=True)
         
         final_pool = tier1 + tier2 + tier3
@@ -91,19 +104,26 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         gold_kws = []
         detail_kws = []
         
-        # 10개 꽉꽉 채우기
         for kw in final_pool:
-            if kw['is_detail'] and len(detail_kws) < 5:
-                detail_kws.append(kw)
-            elif not kw['is_detail'] and len(gold_kws) < 5:
-                gold_kws.append(kw)
+            if kw['is_detail'] and len(detail_kws) < 5: detail_kws.append(kw)
+            elif not kw['is_detail'] and len(gold_kws) < 5: gold_kws.append(kw)
         
-        # 한쪽이 부족하면 남은 데이터에서 강제로 끌어와서 무조건 5:5 밸런스를 맞춤
         for kw in final_pool:
-            if len(gold_kws) < 5 and kw not in gold_kws and kw not in detail_kws:
-                gold_kws.append(kw)
-            if len(detail_kws) < 5 and kw not in gold_kws and kw not in detail_kws:
-                detail_kws.append(kw)
+            if len(gold_kws) < 5 and kw not in gold_kws and kw not in detail_kws: gold_kws.append(kw)
+            if len(detail_kws) < 5 and kw not in gold_kws and kw not in detail_kws: detail_kws.append(kw)
+                
+        # 대체 키워드도 무조건 핵심 지역명 기준으로만 생성 (엉뚱한 구 이름 절대 사용 안 함)
+        fallback_mains = [f"{core_loc}맛집", f"{core_loc}{core_men}", f"{core_loc}식당", f"{core_loc}밥집", f"{core_loc}가볼만한곳"]
+        for fb in fallback_mains:
+            if len(gold_kws) >= 5: break
+            if not any(k['relKeyword'] == fb for k in gold_kws + detail_kws):
+                gold_kws.append({'relKeyword': fb, 'total_search': 10, 'is_detail': False})
+
+        fallback_details = [f"{core_loc}데이트", f"{core_loc}모임장소", f"{core_loc}핫플", f"{core_loc}추천", f"{core_loc}분위기"]
+        for fb in fallback_details:
+            if len(detail_kws) >= 5: break
+            if not any(k['relKeyword'] == fb for k in gold_kws + detail_kws):
+                detail_kws.append({'relKeyword': fb, 'total_search': 10, 'is_detail': True})
                 
         return gold_kws[:5], detail_kws[:5], "success"
 
@@ -117,39 +137,39 @@ def generate_ai_content(prompt, api_key):
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다. 키워드를 기계적으로 나열하지 않고 아주 매력적인 문장으로 녹여냅니다."},
+                {"role": "system", "content": "당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.85
+            temperature=0.7 
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
         return f"생성 실패: {str(e)}"
 
 # --- 4. Streamlit UI ---
-st.set_page_config(page_title="위드멤버 플레이스 최적화", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="위드멤버 플레이스 최적화", layout="wide")
 
 with st.sidebar:
-    st.title("🔑 API 설정")
+    st.title("API 설정")
     if not (N_API_KEY and N_SECRET_KEY and O_API_KEY):
         st.warning("Secrets를 설정하거나 직접 입력하세요.")
         N_API_KEY = st.text_input("Naver API KEY", type="password")
         N_SECRET_KEY = st.text_input("Naver SECRET KEY", type="password")
         O_API_KEY = st.text_input("OpenAI API KEY", type="password")
     else:
-        st.success("API 연결 완료! 자동 모드 ✅")
+        st.success("API 연결 완료! 자동 모드")
 
-st.header("📈 위드멤버 플레이스 최적화 시스템")
+st.header("위드멤버 플레이스 최적화 시스템")
 
-tab1, tab2 = st.tabs(["🎯 키워드 & 소개글", "💬 방문자 리뷰 답글"])
+tab1, tab2 = st.tabs(["키워드 & 소개글", "방문자 리뷰 답글"])
 
 with tab1:
     with st.form("intro_form"):
         c1, c2, c3, c4 = st.columns(4)
-        with c1: store = st.text_input("매장명", placeholder="다정푸드 뒤집고")
-        with c2: reg = st.text_input("지역", placeholder="광주 남구 양림동")
-        with c3: men = st.text_input("메뉴", placeholder="꽃삼겹")
-        with c4: event = st.text_input("이벤트 (선택)", placeholder="소주 1병 무료")
+        with c1: store = st.text_input("매장명", placeholder="로얄경양식&스테이크 광안점")
+        with c2: reg = st.text_input("지역 (관광지, 도로명 등 모두 가능)", placeholder="부산 수영구 민락동")
+        with c3: men = st.text_input("메뉴", placeholder="스테이크 돈까스 파스타")
+        with c4: event = st.text_input("이벤트 (선택)", placeholder="음료 제공")
             
         submit_intro = st.form_submit_button("최적화 실행")
     
@@ -157,61 +177,128 @@ with tab1:
         if not store or not reg or not men:
             st.error("매장명, 지역, 메뉴는 필수 입력입니다!")
         else:
-            with st.spinner("네이버 상권 데이터에서 알짜 키워드를 수집 중입니다..."):
+            with st.spinner("네이버 상권 데이터 수집 및 소개글을 생성 중입니다... (약 10초 소요)"):
                 g_kws, d_kws, msg = get_naver_real_keywords(store, reg, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
                 if msg == "success":
-                    if not g_kws and not d_kws:
-                        st.warning("이 지역과 메뉴 조합으로는 네이버에 검색 데이터가 충분하지 않습니다. 지역명을 '구' 단위로 넓혀보세요.")
-                    else:
-                        col_a, col_b = st.columns(2)
-                        
-                        with col_a:
-                            st.success(f"🎯 지역 메인 키워드 (추출: {len(g_kws)}개)")
-                            for i, kw in enumerate(g_kws):
-                                search_vol = f"{kw['total_search']:,}건"
-                                st.markdown(f"- `{kw['relKeyword']}` (검색량: **{search_vol}**)")
-                                
-                        with col_b:
-                            st.info(f"✨ 메뉴 맞춤 상세 키워드 (추출: {len(d_kws)}개)")
-                            for kw in d_kws:
-                                search_vol = f"{kw['total_search']:,}건"
-                                st.markdown(f"✔️ `{kw['relKeyword']}` (검색량: **{search_vol}**)")
-                        
-                        st.divider()
-                        
-                        all_real_kws = [k['relKeyword'] for k in g_kws + d_kws]
-                        kw_count = len(all_real_kws)
-                        
-                        event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
-                        
-                        prompt = f"""
-                        매장명: '{store}'
-                        주력메뉴: '{men}'
-                        {event_instruction}
-                        
-                        [네이버에서 추출된 실제 타겟 키워드 {kw_count}개]
-                        {', '.join(all_real_kws)}
+                    all_real_kws = [k['relKeyword'] for k in g_kws + d_kws]
+                    event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
+                    
+                    prompt = f"""
+                    매장명: '{store}'
+                    지역: '{reg}'
+                    주력메뉴: '{men}'
+                    {event_instruction}
+                    
+                    [필수 반영 타겟 키워드 10개]
+                    {', '.join(all_real_kws)}
 
-                        [작성 규칙 - 반드시 지킬 것]
-                        1. 위 {kw_count}개의 키워드를 빠짐없이 문장에 자연스럽게 모두 녹여내세요. (단순 나열 금지)
-                        2. 인스타그램 감성 맛집 블로거처럼 물 흐르듯 자연스럽게 작성하세요.
-                        3. 이벤트가 있다면 고객이 방문하고 싶게끔 어필하고, 없다면 맛과 분위기를 강조하세요.
-                        4. 글자 수는 공백 포함 **150자 ~ 200자 사이**로 넉넉하게 구성하세요.
-                        5. 세련된 이모티콘 2~3개를 적재적소에 배치하세요.
-                        """
-                        
-                        with st.spinner("최적화된 키워드를 바탕으로 상위 1% 카피라이팅을 작성 중입니다..."):
-                            intro_res = generate_ai_content(prompt, O_API_KEY)
+                    [작성 규칙]
+                    1. 위 10개의 키워드를 빠짐없이 문장에 자연스럽게 모두 녹여내세요.
+                    2. 인스타그램 감성 맛집 블로거처럼 물 흐르듯 자연스럽게 작성하세요.
+                    3. 글자 수는 공백 포함 150자 ~ 200자 사이로 넉넉하게 구성하세요.
+                    4. 세련된 이모티콘 2~3개를 배치하세요.
+                    5. [강력 경고] 제공된 지역('{reg}')과 메뉴('{men}') 외에 다른 지역명이나 엉뚱한 메뉴는 절대 지어내서 적지 마세요.
+                    6. [강력 경고] 글 마지막에 해시태그(#)를 달거나, 추천 키워드 목록을 따로 출력하지 마세요. 오직 소개글 본문 텍스트만 작성하세요.
+                    """
+                    intro_res = generate_ai_content(prompt, O_API_KEY)
+                    intro_html = intro_res.replace('\n', '<br>')
+                    display_event = event if event else "없음"
+                    
+                    st.divider()
+                    
+                    # 💡 [핵심 3] 키워드와 검색량 글씨의 폰트 사이즈, 굵기, 색상을 100% 동일하게 통일 (16px, 700 굵기)
+                    gold_li = "".join([f"<li style='padding: 14px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 16px; font-weight: 700; color: #212529;'>🎯 {k['relKeyword']}</span> <span style='font-size: 16px; font-weight: 700; color: #212529;'>(검색량: {k['total_search']:,}건)</span></li>" for k in g_kws])
+                    detail_li = "".join([f"<li style='padding: 14px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 16px; font-weight: 700; color: #212529;'>✨ {k['relKeyword']}</span> <span style='font-size: 16px; font-weight: 700; color: #212529;'>(검색량: {k['total_search']:,}건)</span></li>" for k in d_kws])
+                    
+                    html_content = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+                        <style>
+                            @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+                            body {{ font-family: 'Pretendard', sans-serif; background-color: #ffffff; margin: 0; padding: 0; }}
+                            .report-box {{ width: 100%; max-width: 800px; padding: 25px; background: #ffffff; box-sizing: border-box; }}
                             
-                        st.subheader("📝 최적화 소개글 (복사/붙여넣기용)")
-                        st.info(intro_res)
-                        st.code(intro_res)
+                            .header-title {{ border-bottom: 1px solid #ddd; padding-bottom: 15px; margin-bottom: 25px; }}
+                            .header-title h2 {{ color: #212529; font-size: 26px; margin: 0; font-weight: 800; }}
+                            
+                            .input-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 35px; }}
+                            .input-item label {{ display: block; font-size: 13px; font-weight: 600; color: #666; margin-bottom: 6px; }}
+                            .input-item div {{ background-color: #f8f9fa; border: 1px solid #e9ecef; padding: 12px; border-radius: 6px; font-size: 15px; font-weight: 600; color: #212529; }}
+                            
+                            .kw-container {{ display: flex; justify-content: space-between; gap: 20px; margin-bottom: 35px; }}
+                            .kw-box {{ flex: 1; }}
+                            .box-title {{ padding: 14px 15px; border-radius: 6px; font-size: 17px; font-weight: bold; margin-bottom: 15px; text-align: center; }}
+                            .title-main {{ background-color: #f8f9fa; border: 1px solid #dee2e6; color: #212529; }}
+                            .title-detail {{ background-color: #f8f9fa; border: 1px solid #dee2e6; color: #212529; }}
+                            ul {{ list-style: none; padding: 0; margin: 0; }}
+                            
+                            .intro-section h3 {{ font-size: 22px; color: #212529; margin-bottom: 15px; font-weight: 800; }}
+                            .intro-box {{ background-color: #f8f9fa; padding: 25px; border-radius: 8px; border: 1px solid #dee2e6; font-size: 16px; line-height: 1.7; color: #212529; }}
+                            
+                            .btn-down {{ margin-top: 25px; padding: 16px; background-color: #343a40; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 18px; font-weight: bold; width: 100%; max-width: 800px; text-align: center; transition: 0.2s; }}
+                            .btn-down:hover {{ background-color: #212529; }}
+                        </style>
+                    </head>
+                    <body>
+                        <div id="capture-area" class="report-box">
+                            <div class="header-title">
+                                <h2>위드멤버 플레이스 최적화 시스템</h2>
+                            </div>
+                            
+                            <div class="input-grid">
+                                <div class="input-item"><label>매장명</label><div>{store}</div></div>
+                                <div class="input-item"><label>지역</label><div>{reg}</div></div>
+                                <div class="input-item"><label>메뉴</label><div>{men}</div></div>
+                                <div class="input-item"><label>이벤트 (선택)</label><div>{display_event}</div></div>
+                            </div>
+                            
+                            <div class="kw-container">
+                                <div class="kw-box">
+                                    <div class="box-title title-main">지역 메인 키워드 5개</div>
+                                    <ul>{gold_li}</ul>
+                                </div>
+                                <div class="kw-box">
+                                    <div class="box-title title-detail">메뉴 맞춤 상세 키워드 5개</div>
+                                    <ul>{detail_li}</ul>
+                                </div>
+                            </div>
+                            
+                            <div class="intro-section">
+                                <h3>최적화 소개글 (새소식)</h3>
+                                <div class="intro-box">{intro_html}</div>
+                            </div>
+                        </div>
+                        
+                        <button class="btn-down" onclick="downloadImage()">리포트 화면 이미지로 다운로드</button>
+
+                        <script>
+                            function downloadImage() {{
+                                const element = document.getElementById('capture-area');
+                                html2canvas(element, {{ scale: 2, backgroundColor: "#ffffff" }}).then(canvas => {{
+                                    let link = document.createElement('a');
+                                    link.download = '{store}_최적화리포트.png';
+                                    link.href = canvas.toDataURL('image/png');
+                                    link.click();
+                                }});
+                            }}
+                        </script>
+                    </body>
+                    </html>
+                    """
+                    
+                    components.html(html_content, height=1000, scrolling=True)
+                    
+                    st.caption("텍스트 복사용 원본")
+                    st.code(intro_res)
+                    
                 else: 
                     st.error(f"오류가 발생했습니다: {msg}")
 
 with tab2:
-    st.header("💬 방문자 리뷰 답글 생성기")
+    st.header("방문자 리뷰 답글 생성기")
     with st.form("review_form"):
         review_content = st.text_area("손님이 남긴 리뷰 내용을 입력하세요")
         submit_review = st.form_submit_button("답글 생성")
@@ -221,7 +308,7 @@ with tab2:
             st.warning("리뷰 내용을 입력해주세요!")
         else:
             with st.spinner("정성스러운 답글을 작성 중..."):
-                prompt = f"다음 손님의 리뷰에 대해 친절하고 감사해하는 사장님 톤으로 답글을 써줘. 친근한 이모티콘을 문맥에 맞게 2~3개 듬뿍 써줘. 리뷰내용: {review_content}"
+                prompt = f"다음 손님의 리뷰에 대해 친절하고 감사해하는 사장님 톤으로 답글을 써줘. 친근한 이모티콘 듬뿍 써줘. [절대 금지] 글 마지막에 해시태그(#)를 달거나 키워드를 따로 나열하지 마세요. 오직 답글 본문만 작성하세요. 리뷰내용: {review_content}"
                 review_res = generate_ai_content(prompt, O_API_KEY)
                 st.success("작성된 답글:")
                 st.write(review_res)
