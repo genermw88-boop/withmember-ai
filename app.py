@@ -134,13 +134,13 @@ def generate_ai_content(prompt, api_key):
                 {"role": "system", "content": "당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.85
+            temperature=0.7 
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
         return f"생성 실패: {str(e)}"
 
-# --- 4. Streamlit UI (이모티콘 완벽 제거) ---
+# --- 4. Streamlit UI ---
 st.set_page_config(page_title="위드멤버 플레이스 최적화", layout="wide")
 
 with st.sidebar:
@@ -178,9 +178,10 @@ with tab1:
                     all_real_kws = [k['relKeyword'] for k in g_kws + d_kws]
                     event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
                     
-                    # 프롬프트에는 여전히 이모티콘 추가 명령 유지
+                    # 💡 [핵심] 엉뚱한 지역/메뉴 및 해시태그 생성 절대 금지
                     prompt = f"""
                     매장명: '{store}'
+                    지역: '{reg}'
                     주력메뉴: '{men}'
                     {event_instruction}
                     
@@ -190,8 +191,10 @@ with tab1:
                     [작성 규칙]
                     1. 위 10개의 키워드를 빠짐없이 문장에 자연스럽게 모두 녹여내세요.
                     2. 인스타그램 감성 맛집 블로거처럼 물 흐르듯 자연스럽게 작성하세요.
-                    3. 글자 수는 공백 포함 **150자 ~ 200자 사이**로 넉넉하게 구성하세요.
+                    3. 글자 수는 공백 포함 150자 ~ 200자 사이로 넉넉하게 구성하세요.
                     4. 세련된 이모티콘 2~3개를 배치하세요.
+                    5. [강력 경고] 제공된 지역('{reg}')과 메뉴('{men}') 외에 다른 지역명(예: 서울, 강남 등)이나 엉뚱한 메뉴는 절대 지어내서 적지 마세요.
+                    6. [강력 경고] 글 마지막에 해시태그(#)를 달거나, 추천 키워드 목록을 따로 출력하지 마세요. 오직 소개글 본문 텍스트만 작성하세요.
                     """
                     intro_res = generate_ai_content(prompt, O_API_KEY)
                     intro_html = intro_res.replace('\n', '<br>')
@@ -199,7 +202,6 @@ with tab1:
                     
                     st.divider()
                     
-                    # HTML 리포트 디자인 (이모티콘 제거 및 심플한 기호 사용)
                     gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #333;'>• {k['relKeyword']}</span> <span style='font-size: 15px; color:#555;'>(검색량: <strong>{k['total_search']:,}건</strong>)</span></li>" for k in g_kws])
                     detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #333;'>- {k['relKeyword']}</span> <span style='font-size: 15px; color:#555;'>(검색량: <strong>{k['total_search']:,}건</strong>)</span></li>" for k in d_kws])
                     
@@ -259,7 +261,7 @@ with tab1:
                             </div>
                             
                             <div class="intro-section">
-                                <h3>최적화 소개글 (복사/붙여넣기용)</h3>
+                                <h3>최적화 소개글 (새소식)</h3>
                                 <div class="intro-box">{intro_html}</div>
                             </div>
                         </div>
@@ -292,6 +294,7 @@ with tab1:
 with tab2:
     st.header("방문자 리뷰 답글 생성기")
     with st.form("review_form"):
+        # 💡 [원상복구] 리뷰 탭은 깔끔하게 리뷰 입력창만 남겨두었습니다.
         review_content = st.text_area("손님이 남긴 리뷰 내용을 입력하세요")
         submit_review = st.form_submit_button("답글 생성")
     
@@ -300,8 +303,8 @@ with tab2:
             st.warning("리뷰 내용을 입력해주세요!")
         else:
             with st.spinner("정성스러운 답글을 작성 중..."):
-                # 리뷰 답글에도 이모티콘 추가 명령 유지
-                prompt = f"다음 손님의 리뷰에 대해 친절하고 감사해하는 사장님 톤으로 답글을 써줘. 친근한 이모티콘 듬뿍 써줘. 리뷰내용: {review_content}"
+                # 리뷰 답글에도 해시태그 생성 방지 추가
+                prompt = f"다음 손님의 리뷰에 대해 친절하고 감사해하는 사장님 톤으로 답글을 써줘. 친근한 이모티콘 듬뿍 써줘. [절대 금지] 글 마지막에 해시태그(#)를 달거나 키워드를 따로 나열하지 마세요. 오직 답글 본문만 작성하세요. 리뷰내용: {review_content}"
                 review_res = generate_ai_content(prompt, O_API_KEY)
                 st.success("작성된 답글:")
                 st.write(review_res)
