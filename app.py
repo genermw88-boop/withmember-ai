@@ -22,7 +22,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. [완벽 개선] 다중 지역명 동시 타겟팅 & 스마트 방어 엔진 ---
+# --- 2. [완벽 개선] 광역 도시 블랙홀 차단 & 핀셋 타겟팅 ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -36,28 +36,30 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         'X-Signature': signature
     }
     
-    # 💡 [핵심 1] 입력된 모든 지역 단어를 추출하여 타겟으로 설정
     reg_parts = reg.strip().split()
     if not reg_parts:
         return [], [], "지역명을 올바르게 입력해주세요."
 
-    valid_locs = [p for p in reg_parts if len(p) >= 2]
-    if not valid_locs: valid_locs = reg_parts 
-
-    # 광역 시/도와 세부 지역(구/동/관광지)을 분리
+    # 1. 광역 시/도와 세부 지역(동구, 반여울)을 완벽히 분리
     broad_cities = ["서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "제주", "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남"]
-    broad_valid = [loc for loc in valid_locs if any(loc.startswith(bc) for bc in broad_cities)]
-    specific_valid = [loc for loc in valid_locs if loc not in broad_valid]
+    
+    city_locs = [p for p in reg_parts if any(p.startswith(bc) for bc in broad_cities)]
+    specific_locs = [p for p in reg_parts if p not in city_locs]
 
     core_men_list = men.replace(",", " ").split()
     core_men = core_men_list[0] if core_men_list else ""
+    # 유연한 메뉴 매칭을 위해 줄임말 생성 (예: '돼지국밥' -> '국밥')
+    menu_short = core_men[-2:] if len(core_men) >= 3 else core_men
     
-    # 힌트를 던질 때도 좁은 동네부터 넓은 도시까지 골고루 섞어서 던짐
+    # 2. 힌트 투척 시 엉뚱한 대구 전체 데이터가 오지 않도록 핀셋 힌트 제공
     hints_list = []
-    for loc in reversed(valid_locs):
-        hints_list.append(f"{loc}맛집")
-        if core_men: hints_list.append(f"{loc}{core_men}")
-        if len(hints_list) >= 5: break
+    if specific_locs:
+        hints_list.append(f"{specific_locs[-1]}맛집")
+        hints_list.append(f"{specific_locs[-1]}{core_men}")
+        if len(specific_locs) > 1:
+            hints_list.append(f"{specific_locs[-2]}맛집")
+    if city_locs:
+        hints_list.append(f"{city_locs[0]}{core_men}") # 대구돼지국밥
         
     params = {'hintKeywords': ",".join(hints_list[:5]), 'showDetail': 1}
     
@@ -68,41 +70,28 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         data = res.json().get('keywordList', [])
         valid_kws = []
         
-        # 🚨 [강력 차단] 타 업종 메뉴 및 쓰레기 키워드 블랙리스트
-        stop_foods = [
-            '삼겹살', '돼지갈비', '갈비', '김치찌개', '된장찌개', '횟집', '회', '국밥', '해장국', '마라탕', 
-            '치킨', '피자', '중국집', '짜장면', '짬뽕', '초밥', '스시', '떡볶이', '한정식', '백반', 
-            '칼국수', '냉면', '밀면', '족발', '보쌈', '곱창', '막창', '대창', '닭갈비', '고기집', 
-            '소고기', '한우', '돈까스', '돈가스', '파스타', '스테이크', '브런치', '카페', '디저트', '술집'
-        ]
-        stop_garbage = ['칠순', '팔순', '환갑', '상견례', '누리', '창업', '배달', '알바', '구인', '임대', '클래스', '도매', '공장', '학원', '병원', '포장마차', '수제화', '안경', '미용실']
-        
+        # 강력한 블랙리스트 유지
+        stop_foods = ['삼겹살', '돼지갈비', '갈비', '김치찌개', '된장찌개', '횟집', '회', '해장국', '마라탕', '치킨', '피자', '중국집', '짜장면', '짬뽕', '초밥', '스시', '떡볶이', '한정식', '백반', '칼국수', '냉면', '밀면', '족발', '보쌈', '곱창', '막창', '대창', '닭갈비', '고기집', '소고기', '한우', '돈까스', '파스타', '스테이크', '브런치', '카페', '디저트', '술집']
+        stop_garbage = ['칠순', '팔순', '환갑', '상견례', '누리', '창업', '배달', '알바', '구인', '임대', '클래스', '도매', '공장', '학원', '병원', '포장마차', '수제화', '안경', '미용실', '출장', '뷔페']
         blacklist = [sf for sf in stop_foods if not any(m in sf or sf in m for m in core_men_list)] + stop_garbage
         
         for item in data:
             kw = item['relKeyword']
             if any(x in kw for x in ["주변", "근처", "오늘"]): continue
             
-            # 1. 입력된 지역 단어 중 하나라도 포함되어 있어야 함
-            matched_specifics = [loc for loc in specific_valid if loc in kw]
-            matched_broads = [loc for loc in broad_valid if loc in kw]
+            matched_specific = [loc for loc in specific_locs if loc in kw]
+            matched_city = [loc for loc in city_locs if loc in kw]
             
-            if not matched_specifics and not matched_broads:
+            # 입력한 지역 단어가 하나도 없으면 버림
+            if not matched_specific and not matched_city:
                 continue
             
-            # 💡 [핵심 2] 스마트 타지역 방어 로직 ("대구 동천동 맛집" 원천 차단)
-            # '대구' 같은 광역 단어만 일치했는데, 키워드 안에 내가 입력하지 않은 다른 동/구 이름이 섞여 있으면 버림!
-            if matched_broads and not matched_specifics:
-                temp_kw = kw
-                for bc in matched_broads: temp_kw = temp_kw.replace(bc, "")
-                safe_words = ['맛집', '식당', '카페', '술집', '밥집', '핫플', '데이트', '추천', '가볼만한곳', '회식', '모임', '점심', '저녁', '코스', '명소'] + core_men_list
-                for sw in safe_words: temp_kw = temp_kw.replace(sw, "")
-                
-                # 안전한 단어를 다 빼고 남은 찌꺼기에 '동, 구, 역, 길, 리'가 있다면 100% 다른 동네임
-                if any(char in temp_kw for char in ['동', '구', '역', '길', '리', '시', '군', '면', '읍']):
+            # 🚨 [가장 중요한 핵심 방어막] 광역 도시(대구)만 일치하는 경우
+            if matched_city and not matched_specific:
+                # 대구낮술, 대구삼계탕처럼 '대구'만 있고 '돼지국밥'이 없으면 100% 버림!
+                if not (core_men in kw or menu_short in kw):
                     continue
             
-            # 2. 블랙리스트 (메뉴, 쓰레기 키워드) 차단
             if any(b in kw for b in blacklist): 
                 continue
             
@@ -116,7 +105,6 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             item['is_detail'] = is_detail
             valid_kws.append(item)
                 
-        # 검색량 필터링 (100~1000건 우선)
         tier1 = sorted([k for k in valid_kws if 100 <= k['total_search'] <= 1000], key=lambda x: x['total_search'], reverse=True)
         tier2 = sorted([k for k in valid_kws if (50 <= k['total_search'] <= 3000) and (k not in tier1)], key=lambda x: x['total_search'], reverse=True)
         tier3 = sorted([k for k in valid_kws if k not in tier1 and k not in tier2], key=lambda x: x['total_search'], reverse=True)
@@ -126,7 +114,6 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         gold_kws = []
         detail_kws = []
         
-        # 메인 5개, 상세 5개 골고루 분배
         for kw in final_pool:
             if kw['is_detail'] and len(detail_kws) < 5: detail_kws.append(kw)
             elif not kw['is_detail'] and len(gold_kws) < 5: gold_kws.append(kw)
@@ -135,18 +122,25 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             if len(gold_kws) < 5 and kw not in gold_kws and kw not in detail_kws: gold_kws.append(kw)
             if len(detail_kws) < 5 and kw not in gold_kws and kw not in detail_kws: detail_kws.append(kw)
                 
-        # 💡 [핵심 3] 대체 키워드 생성 시, 입력된 시/구/동을 아주 예쁘게 골고루 섞어서 생성
+        # 💡 [핵심 3] 대체 키워드 생성 시에도 '대구' 대신 무조건 좁은 동네(동구, 반여울) 중심으로 자동 생성
         fallback_mains = []
-        fallback_details = []
-        for loc in reversed(valid_locs):
-            fallback_mains.extend([f"{loc}맛집", f"{loc}{core_men}"])
-            fallback_details.extend([f"{loc}데이트", f"{loc}모임장소", f"{loc}핫플", f"{loc}추천"])
+        if specific_locs:
+            fallback_mains.extend([f"{specific_locs[-1]}맛집", f"{specific_locs[-1]}{core_men}"])
+            if len(specific_locs) > 1:
+                fallback_mains.append(f"{specific_locs[-2]}맛집")
+        if city_locs:
+            fallback_mains.append(f"{city_locs[0]}{core_men}") # 대구돼지국밥 보장
             
         for fb in fallback_mains:
             if len(gold_kws) >= 5: break
             if not any(k['relKeyword'] == fb for k in gold_kws + detail_kws):
                 gold_kws.append({'relKeyword': fb, 'total_search': 10, 'is_detail': False})
 
+        fallback_details = []
+        if specific_locs:
+            s_loc = specific_locs[-1]
+            fallback_details.extend([f"{s_loc}식당", f"{s_loc}밥집", f"{s_loc}데이트", f"{s_loc}모임장소", f"{s_loc}핫플"])
+            
         for fb in fallback_details:
             if len(detail_kws) >= 5: break
             if not any(k['relKeyword'] == fb for k in gold_kws + detail_kws):
@@ -194,7 +188,7 @@ with tab1:
     with st.form("intro_form"):
         c1, c2, c3, c4 = st.columns(4)
         with c1: store = st.text_input("매장명", placeholder="서울보쌈돼지국밥")
-        with c2: reg = st.text_input("지역 (시/구/동 모두 입력)", placeholder="대구 동구 신기동 반여울")
+        with c2: reg = st.text_input("지역 (시/구/동 모두 입력)", placeholder="대구 동구 반여울")
         with c3: men = st.text_input("메뉴", placeholder="돼지국밥")
         with c4: event = st.text_input("이벤트 (선택)", placeholder="음료 제공")
             
@@ -234,7 +228,6 @@ with tab1:
                     
                     st.divider()
                     
-                    # UI 및 폰트 크기/굵기 완전 통일 유지 (16px, 700)
                     gold_li = "".join([f"<li style='padding: 14px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 16px; font-weight: 700; color: #212529;'>🎯 {k['relKeyword']}</span> <span style='font-size: 16px; font-weight: 700; color: #212529;'>(검색량: {k['total_search']:,}건)</span></li>" for k in g_kws])
                     detail_li = "".join([f"<li style='padding: 14px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 16px; font-weight: 700; color: #212529;'>✨ {k['relKeyword']}</span> <span style='font-size: 16px; font-weight: 700; color: #212529;'>(검색량: {k['total_search']:,}건)</span></li>" for k in d_kws])
                     
