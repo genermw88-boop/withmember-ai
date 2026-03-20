@@ -22,7 +22,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. [가장 완벽한 필터] 입력된 모든 지역 골고루 추출 엔진 ---
+# --- 2. [완벽 개선] 100% 화이트리스트 기반 추출 엔진 ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -36,7 +36,7 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         'X-Signature': signature
     }
     
-    # 1. 입력된 지역 단어 모두 추출 (예: ['인천', '중구', '운서동'])
+    # 1. 입력된 지역 단어 모두 추출
     reg_parts = reg.strip().split()
     if not reg_parts:
         return [], [], "지역명을 올바르게 입력해주세요."
@@ -49,13 +49,12 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     input_specific = [loc for loc in valid_locs if loc not in input_broad]
 
     core_men_list = men.replace(",", " ").split()
-    core_men = core_men_list[0] if core_men_list else ""
     
-    # 네이버에 힌트 던질 때도 좁은 동네부터 넓은 도시까지 골고루 던짐
     hints_list = []
     for loc in reversed(valid_locs):
         hints_list.append(f"{loc}맛집")
-        if core_men: hints_list.append(f"{loc}{core_men}")
+        for m in core_men_list[:2]:
+            hints_list.append(f"{loc}{m}")
         if len(hints_list) >= 5: break
     
     params = {'hintKeywords': ",".join(hints_list[:5]), 'showDetail': 1}
@@ -67,32 +66,12 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         data = res.json().get('keywordList', [])
         valid_kws = []
         
-        # 무적의 타 업종 메뉴 및 쓰레기 블랙리스트
-        stop_foods = [
-            '장어', '해물', '킹크랩', '대게', '랍스터', '아구찜', '중식', '짜장', '짬뽕', '레스토랑', 
-            '뷔페', '삼계탕', '치킨', '피자', '백반', '한정식', '마라탕', '초밥', '스시', '떡볶이', '분식',
-            '국밥', '해장국', '칼국수', '냉면', '밀면', '족발', '보쌈', '곱창', '막창', '대창', '닭갈비', 
-            '돈까스', '돈가스', '파스타', '스테이크', '브런치', '디저트', '소고기', '한우', '삼겹살', '돼지갈비', 
-            '갈비', '김치찌개', '된장찌개', '횟집', '회', '참치', '연어', '양꼬치', '카페', '술집', '이자카야'
-        ]
-        stop_garbage = ['칠순', '팔순', '환갑', '상견례', '누리', '창업', '배달', '알바', '구인', '임대', '클래스', '도매', '공장', '학원', '병원', '포장마차', '수제화', '안경', '미용실', '출장', '호텔', '낮술']
-        
-        blacklist = [sf for sf in stop_foods if not any(m in sf or sf in m for m in core_men_list)] + stop_garbage
-        
-        # '인천' 같은 광역 단어만 있을 때 허용할 아주 순수한 형태들 (인천맛집, 인천돼지김치구이 등)
-        allowed_broad_formats = []
-        for bc in input_broad:
-            allowed_broad_formats.extend([
-                f"{bc}맛집", f"{bc}{core_men}", f"{bc}식당", f"{bc}밥집", 
-                f"{bc}데이트", f"{bc}핫플", f"{bc}가볼만한곳", f"{bc}추천", f"{bc}회식", f"{bc}모임장소"
-            ])
-
         for item in data:
             kw = item['relKeyword']
             kw_nospace = kw.replace(" ", "")
             if any(x in kw for x in ["주변", "근처", "오늘"]): continue
             
-            # 🚨 [규칙 1] '울산 중구' 차단: 내가 안 친 다른 광역도시(울산, 서울 등)가 있으면 즉시 사살
+            # 🚨 [규칙 1] 타지역(울산 중구 등) 100% 차단
             conflict = False
             for bc in broad_cities:
                 if bc not in input_broad and bc in kw:
@@ -100,42 +79,51 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                     break
             if conflict: continue
             
-            has_broad = any(bc in kw for bc in input_broad) # 예: 인천
-            has_specific = any(loc in kw for loc in input_specific) # 예: 중구, 운서동
+            # 🚨 [규칙 2] 내가 입력한 지역 단어가 아예 없으면 버림
+            matched_broads = [loc for loc in input_broad if loc in kw]
+            matched_specifics = [loc for loc in input_specific if loc in kw]
+            if not matched_broads and not matched_specifics: continue
             
-            # 🚨 [규칙 2] 입력한 단어가 하나도 없으면 버림
-            if not has_broad and not has_specific: continue
-            
-            # 🚨 [규칙 3] '인천'은 있는데 '운서동'이 없을 때 (예: 인천송도맛집 차단)
-            if has_broad and not has_specific:
-                # 오직 '인천맛집', '인천돼지김치구이' 같이 순수하게 결합된 형태만 통과!
-                if kw_nospace not in allowed_broad_formats:
-                    continue
-                    
-            # 🚨 [규칙 4] '중구'는 있는데 안 친 다른 '동/역'이 섞여 있을 때 (예: 중구 을지로 맛집 차단)
-            if has_specific:
+            # 광역(인천)만 있고 세부(운서동)가 없을 때, 다른 동네(부평, 송도)가 섞여 있는지 엄격히 검사
+            if matched_broads and not matched_specifics:
                 temp_kw = kw_nospace
-                for loc in valid_locs: temp_kw = temp_kw.replace(loc, "")
-                safe_words = ['맛집', '식당', '카페', '술집', '밥집', '핫플', '데이트', '추천', '가볼만한곳', '회식', '모임', '점심', '저녁', '코스'] + core_men_list
-                for sw in safe_words: temp_kw = temp_kw.replace(sw, "")
-                # 남은 글자 중에 동/구/역/길/리 가 있으면 무조건 다른 동네임
+                for bc in matched_broads: temp_kw = temp_kw.replace(bc, "")
+                for m in core_men_list: temp_kw = temp_kw.replace(m, "")
+                for sw in ['맛집', '식당', '카페', '술집', '밥집', '핫플', '데이트', '추천', '가볼만한곳', '회식', '모임', '점심', '저녁']:
+                    temp_kw = temp_kw.replace(sw, "")
+                # 남은 글자에 동/구/역/길/리가 있으면 무조건 다른 동네이므로 차단
                 if any(char in temp_kw for char in ['동', '구', '역', '길', '리', '읍', '면']):
                     continue
 
-            # 메뉴 블랙리스트 차단
-            if any(b in kw for b in blacklist): 
-                continue
+            # 🚨 [가장 중요한 핵심 방어막: 화이트리스트]
+            # 1) 메뉴 이름이 그대로 박혀있거나
+            is_menu_related = any(m in kw for m in core_men_list)
+            
+            # 2) 완벽하게 순수한 "지역명 + 일반명사(맛집, 핫플 등)" 인 경우만 통과!
+            is_exact_generic = False
+            allowed_generics = ['맛집', '식당', '밥집', '술집', '데이트', '핫플', '가볼만한곳', '추천', '회식', '모임장소', '모임', '점심', '저녁', '분위기', '카페', '데이트코스', '가족식사', '가족모임']
+            for loc in valid_locs:
+                for g in allowed_generics:
+                    if kw_nospace == f"{loc}{g}":
+                        is_exact_generic = True
+                        break
+                if is_exact_generic: break
+                
+            # 메뉴도 안 들어있고, 순수한 제네릭도 아니면(예: 운서동 장어, 인천 레스토랑) -> 즉시 사살!
+            if not is_menu_related and not is_exact_generic:
+                continue 
             
             pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
             mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
             total_search = pc + mo
             
-            is_detail = any(x in kw for x in core_men_list + ['회식', '모임', '룸', '데이트', '가족', '핫플', '카페', '점심', '저녁', '추천', '분위기', '가볼만한곳'])
+            is_detail = any(x in kw for x in core_men_list + ['회식', '모임', '룸', '데이트', '가족', '핫플', '카페', '점심', '저녁', '추천', '분위기', '가볼만한곳', '코스'])
             
             item['total_search'] = total_search
             item['is_detail'] = is_detail
             valid_kws.append(item)
                 
+        # 100~1000건 필터링 
         tier1 = sorted([k for k in valid_kws if 100 <= k['total_search'] <= 1000], key=lambda x: x['total_search'], reverse=True)
         tier2 = sorted([k for k in valid_kws if (50 <= k['total_search'] <= 3000) and (k not in tier1)], key=lambda x: x['total_search'], reverse=True)
         tier3 = sorted([k for k in valid_kws if k not in tier1 and k not in tier2], key=lambda x: x['total_search'], reverse=True)
@@ -153,12 +141,20 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             if len(gold_kws) < 5 and kw not in gold_kws and kw not in detail_kws: gold_kws.append(kw)
             if len(detail_kws) < 5 and kw not in gold_kws and kw not in detail_kws: detail_kws.append(kw)
                 
-        # 💡 [핵심 보완] 네이버가 데이터를 안 주면, 시스템이 인천, 중구, 운서동을 골고루 섞어서 완벽한 10개를 무조건 만들어냄!
+        # 💡 [핵심 스마트 보완] 카페냐 식당이냐에 따라 부족한 빈칸을 완벽하게 맞춤 생성
+        is_cafe = any(c in men for c in ['카페', '커피', '디저트', '베이커리', '빵', '마카롱', '케이크', '다과'])
+        
         fb_mains = []
         fb_details = []
+        
         for loc in reversed(valid_locs):
-            fb_mains.extend([f"{loc}맛집", f"{loc}{core_men}"])
-            fb_details.extend([f"{loc}데이트", f"{loc}핫플", f"{loc}회식"])
+            fb_mains.append(f"{loc}{core_men_list[0]}")
+            fb_mains.append(f"{loc}맛집" if not is_cafe else f"{loc}카페")
+            
+            if is_cafe:
+                fb_details.extend([f"{loc}디저트", f"{loc}데이트", f"{loc}분위기", f"{loc}핫플", f"{loc}추천"])
+            else:
+                fb_details.extend([f"{loc}밥집" if not "술" in men else f"{loc}술집", f"{loc}회식", f"{loc}모임장소", f"{loc}데이트", f"{loc}추천"])
             
         for fb in fb_mains:
             if len(gold_kws) >= 5: break
@@ -191,7 +187,7 @@ def generate_ai_content(prompt, api_key):
     except Exception as e:
         return f"생성 실패: {str(e)}"
 
-# --- 4. Streamlit UI (폰트 유지 및 이미지 다운로드) ---
+# --- 4. Streamlit UI (폰트 및 UI 통일 유지) ---
 st.set_page_config(page_title="위드멤버 플레이스 최적화", layout="wide")
 
 with st.sidebar:
