@@ -50,6 +50,11 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
 
     core_men_list = men.replace(",", " ").split()
     
+    # 💡 [핵심 스마트 분류] 메뉴 특성에 따른 속성 정의 (술/회식 키워드 원천 차단용)
+    is_cafe = any(c in men for c in ['카페', '커피', '디저트', '베이커리', '빵', '마카롱', '케이크', '다과'])
+    is_snack = any(s in men for s in ['김밥', '분식', '떡볶이', '유부초밥', '돈까스', '라면', '혼밥', '우동'])
+    is_drink_meat = any(d in men for d in ['술', '맥주', '소주', '포차', '고기', '삼겹살', '곱창', '막창', '안주'])
+    
     hints_list = []
     for loc in reversed(valid_locs):
         hints_list.append(f"{loc}맛집")
@@ -66,12 +71,20 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         data = res.json().get('keywordList', [])
         valid_kws = []
         
+        # 메뉴에 따른 허용 일반명사 동적 생성
+        allowed_generics = ['맛집', '식당', '밥집', '데이트', '핫플', '가볼만한곳', '추천', '점심', '저녁', '분위기', '데이트코스', '가족식사']
+        if is_cafe:
+            allowed_generics.extend(['카페', '디저트'])
+        # 분식/카페가 아닐 때만 술집, 회식 허용
+        if not is_cafe and not is_snack:
+            allowed_generics.extend(['술집', '회식', '모임장소', '모임', '가족모임'])
+            
         for item in data:
             kw = item['relKeyword']
             kw_nospace = kw.replace(" ", "")
             if any(x in kw for x in ["주변", "근처", "오늘"]): continue
             
-            # 🚨 [규칙 1] 타지역(울산 중구 등) 100% 차단
+            # 🚨 [규칙 1] 타지역 차단
             conflict = False
             for bc in broad_cities:
                 if bc not in input_broad and bc in kw:
@@ -79,29 +92,24 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                     break
             if conflict: continue
             
-            # 🚨 [규칙 2] 내가 입력한 지역 단어가 아예 없으면 버림
+            # 🚨 [규칙 2] 입력한 지역 단어 누락 차단
             matched_broads = [loc for loc in input_broad if loc in kw]
             matched_specifics = [loc for loc in input_specific if loc in kw]
             if not matched_broads and not matched_specifics: continue
             
-            # 광역(인천)만 있고 세부(운서동)가 없을 때, 다른 동네(부평, 송도)가 섞여 있는지 엄격히 검사
             if matched_broads and not matched_specifics:
                 temp_kw = kw_nospace
                 for bc in matched_broads: temp_kw = temp_kw.replace(bc, "")
                 for m in core_men_list: temp_kw = temp_kw.replace(m, "")
-                for sw in ['맛집', '식당', '카페', '술집', '밥집', '핫플', '데이트', '추천', '가볼만한곳', '회식', '모임', '점심', '저녁']:
+                for sw in allowed_generics:
                     temp_kw = temp_kw.replace(sw, "")
-                # 남은 글자에 동/구/역/길/리가 있으면 무조건 다른 동네이므로 차단
                 if any(char in temp_kw for char in ['동', '구', '역', '길', '리', '읍', '면']):
                     continue
 
-            # 🚨 [가장 중요한 핵심 방어막: 화이트리스트]
-            # 1) 메뉴 이름이 그대로 박혀있거나
+            # 🚨 [규칙 3: 화이트리스트] 메뉴 포함 또는 허용된 제네릭 키워드만 통과
             is_menu_related = any(m in kw for m in core_men_list)
-            
-            # 2) 완벽하게 순수한 "지역명 + 일반명사(맛집, 핫플 등)" 인 경우만 통과!
             is_exact_generic = False
-            allowed_generics = ['맛집', '식당', '밥집', '술집', '데이트', '핫플', '가볼만한곳', '추천', '회식', '모임장소', '모임', '점심', '저녁', '분위기', '카페', '데이트코스', '가족식사', '가족모임']
+            
             for loc in valid_locs:
                 for g in allowed_generics:
                     if kw_nospace == f"{loc}{g}":
@@ -109,7 +117,6 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                         break
                 if is_exact_generic: break
                 
-            # 메뉴도 안 들어있고, 순수한 제네릭도 아니면(예: 운서동 장어, 인천 레스토랑) -> 즉시 사살!
             if not is_menu_related and not is_exact_generic:
                 continue 
             
@@ -141,9 +148,7 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             if len(gold_kws) < 5 and kw not in gold_kws and kw not in detail_kws: gold_kws.append(kw)
             if len(detail_kws) < 5 and kw not in gold_kws and kw not in detail_kws: detail_kws.append(kw)
                 
-        # 💡 [핵심 스마트 보완] 카페냐 식당이냐에 따라 부족한 빈칸을 완벽하게 맞춤 생성
-        is_cafe = any(c in men for c in ['카페', '커피', '디저트', '베이커리', '빵', '마카롱', '케이크', '다과'])
-        
+        # 💡 [수정된 핵심 보완] 분식, 카페, 일반식당에 따라 부족한 빈칸을 완벽하게 맞춤 생성
         fb_mains = []
         fb_details = []
         
@@ -153,8 +158,12 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             
             if is_cafe:
                 fb_details.extend([f"{loc}디저트", f"{loc}데이트", f"{loc}분위기", f"{loc}핫플", f"{loc}추천"])
+            elif is_snack: # 분식/김밥류일 경우 절대 술/회식을 넣지 않음
+                fb_details.extend([f"{loc}밥집", f"{loc}점심", f"{loc}혼밥", f"{loc}분식", f"{loc}추천"])
+            elif is_drink_meat:
+                fb_details.extend([f"{loc}술집", f"{loc}회식", f"{loc}모임장소", f"{loc}핫플", f"{loc}추천"])
             else:
-                fb_details.extend([f"{loc}밥집" if not "술" in men else f"{loc}술집", f"{loc}회식", f"{loc}모임장소", f"{loc}데이트", f"{loc}추천"])
+                fb_details.extend([f"{loc}밥집", f"{loc}모임", f"{loc}점심", f"{loc}저녁", f"{loc}추천"])
             
         for fb in fb_mains:
             if len(gold_kws) >= 5: break
@@ -171,23 +180,23 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     except Exception as e:
         return [], [], f"시스템 에러: {str(e)}"
 
-# --- 3. OpenAI 카피라이팅 함수 ---
-def generate_ai_content(prompt, api_key):
+# --- 3. OpenAI 카피라이팅 함수 (Temperature 및 System Role 제어 추가) ---
+def generate_ai_content(prompt, api_key, system_role="당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다.", temp=0.7):
     try:
         client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다."},
+                {"role": "system", "content": system_role},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.7 
+            temperature=temp 
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
         return f"생성 실패: {str(e)}"
 
-# --- 4. Streamlit UI (폰트 및 UI 통일 유지) ---
+# --- 4. Streamlit UI ---
 st.set_page_config(page_title="위드멤버 플레이스 최적화", layout="wide")
 
 with st.sidebar:
@@ -225,6 +234,11 @@ with tab1:
                     all_real_kws = [k['relKeyword'] for k in g_kws + d_kws]
                     event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
                     
+                    # 💡 [강력 제어] 시스템 프롬프트 명확화
+                    system_role = f"""당신은 '{store}' 매장 전담 마케터입니다. 
+                    반드시 사용자가 제공한 지역, 메뉴, 이벤트 정보만을 기반으로 철저하게 사실만을 작성해야 합니다. 
+                    사용자가 언급하지 않은 상황(예: 회식, 술자리, 단체 모임 등)이나 타겟 고객층을 임의로 지어내는 환각(Hallucination) 행위를 절대 엄금합니다."""
+
                     prompt = f"""
                     매장명: '{store}'
                     지역: '{reg}'
@@ -242,7 +256,9 @@ with tab1:
                     5. [강력 경고] 제공된 지역('{reg}')과 메뉴('{men}') 외에 다른 지역명이나 엉뚱한 메뉴는 절대 지어내서 적지 마세요.
                     6. [강력 경고] 글 마지막에 해시태그(#)를 달거나, 추천 키워드 목록을 따로 출력하지 마세요. 오직 소개글 본문 텍스트만 작성하세요.
                     """
-                    intro_res = generate_ai_content(prompt, O_API_KEY)
+                    
+                    # 💡 [강력 제어] Temperature를 0.2로 낮추어 창의성 억제 및 통제력 강화
+                    intro_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role, temp=0.2)
                     intro_html = intro_res.replace('\n', '<br>')
                     display_event = event if event else "없음"
                     
@@ -348,6 +364,7 @@ with tab2:
             st.warning("리뷰 내용을 입력해주세요!")
         else:
             with st.spinner("정성스러운 답글을 작성 중..."):
+                # 리뷰 답글은 기존 온도(0.7) 및 기본 프롬프트 유지
                 prompt = f"다음 손님의 리뷰에 대해 친절하고 감사해하는 사장님 톤으로 답글을 써줘. 친근한 이모티콘 듬뿍 써줘. [절대 금지] 글 마지막에 해시태그(#)를 달거나 키워드를 따로 나열하지 마세요. 오직 답글 본문만 작성하세요. 리뷰내용: {review_content}"
                 review_res = generate_ai_content(prompt, O_API_KEY)
                 st.success("작성된 답글:")
