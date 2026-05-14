@@ -22,7 +22,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. 네이버 키워드 추출 엔진 (검색량 높은 순 우선 + 5개 보장) ---
+# --- 2. 네이버 키워드 추출 엔진 (낮은 검색량 철저히 배제) ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -42,13 +42,11 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
 
     valid_locs = [p for p in reg_parts if len(p) >= 2]
     if not valid_locs: valid_locs = reg_parts
-    fallback_loc = valid_locs[0] if valid_locs else "지역"
 
     broad_cities = ["서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "제주", "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남"]
     input_broad = [loc for loc in valid_locs if any(loc.startswith(bc) for bc in broad_cities)]
     input_specific = [loc for loc in valid_locs if loc not in input_broad]
     core_men_list = men.replace(",", " ").split()
-    fallback_men = core_men_list[0] if core_men_list else "맛집"
     
     is_cafe = any(c in men for c in ['카페', '커피', '디저트', '베이커리', '빵', '마카롱', '케이크', '다과'])
     is_snack = any(s in men for s in ['김밥', '분식', '떡볶이', '유부초밥', '돈까스', '라면', '혼밥', '우동'])
@@ -91,41 +89,30 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                 is_exact_generic = any(kw_nospace == f"{loc}{g}" for loc in valid_locs for g in allowed_generics)
                 if not is_menu_related and not is_exact_generic: continue 
                 
-                pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
-                mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
-                item['total_search'] = pc + mo
+                # < 10 같은 문자열은 0으로 처리하여 필터링되게 함
+                pc = 0 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
+                mo = 0 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
+                total_search = pc + mo
+                
+                # 🚨 [핵심 수정] 검색량 30 미만(10, 20 등)의 무의미한 키워드는 완전히 버림
+                if total_search < 30: 
+                    continue
+                
+                item['total_search'] = total_search
                 item['is_detail'] = any(x in kw for x in core_men_list + ['회식', '모임', '룸', '데이트', '가족', '핫플', '카페', '점심', '저녁', '추천', '분위기', '가볼만한곳', '코스'])
                 valid_kws.append(item)
                     
-            # 💡 [핵심 수정] 100~1000 제한을 없애고 무조건 검색량이 높은 순으로 정렬하여 높은 검색량 키워드 우선 배치
+            # 검색량 높은 순으로 정렬
             valid_kws = sorted(valid_kws, key=lambda x: x['total_search'], reverse=True)
             
             for kw in valid_kws:
                 if kw['is_detail'] and len(detail_kws) < 5: detail_kws.append(kw)
                 elif not kw['is_detail'] and len(gold_kws) < 5: gold_kws.append(kw)
 
-    except Exception:
-        pass # 에러 발생 시 아래 강제 채우기 로직으로 넘어감
+        return gold_kws, detail_kws, "success"
 
-    # 🚨 API 한도 초과나 결과 부족 시 무조건 5개를 채우기 위한 백업 로직
-    fallback_generics = ['맛집', '핫플', '가볼만한곳', '데이트', '추천']
-    fallback_details = [fallback_men, '점심', '저녁', '모임', '분위기']
-    
-    idx = 0
-    while len(gold_kws) < 5:
-        kw_str = f"{fallback_loc} {fallback_generics[idx % len(fallback_generics)]}"
-        if not any(k['relKeyword'] == kw_str for k in gold_kws):
-            gold_kws.append({'relKeyword': kw_str, 'total_search': '10 이하'})
-        idx += 1
-        
-    idx = 0
-    while len(detail_kws) < 5:
-        kw_str = f"{fallback_loc} {fallback_details[idx % len(fallback_details)]}"
-        if not any(k['relKeyword'] == kw_str for k in detail_kws):
-            detail_kws.append({'relKeyword': kw_str, 'total_search': '10 이하'})
-        idx += 1
-        
-    return gold_kws[:5], detail_kws[:5], "success"
+    except Exception as e:
+        return [], [], f"시스템 에러: {str(e)}"
 
 # --- 3. OpenAI 카피라이팅 함수 ---
 def generate_ai_content(prompt, api_key, system_role="당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다.", temp=0.7):
@@ -177,8 +164,9 @@ with tab1:
                 
                 if msg == "success":
                     all_real_kws = [k['relKeyword'] for k in g_kws + d_kws]
-                    event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
+                    kw_count = len(all_real_kws)
                     
+                    event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
                     system_role = f"""당신은 '{store}' 매장 전담 마케터입니다. 네이버 스마트플레이스의 '새소식' 게시글을 작성합니다."""
 
                     prompt = f"""
@@ -187,19 +175,18 @@ with tab1:
                     주력메뉴: '{men}'
                     {event_instruction}
                     
-                    [필수 반영 타겟 키워드 10개]
-                    {', '.join(all_real_kws)}
+                    [필수 반영 타겟 키워드 {kw_count}개]
+                    {', '.join(all_real_kws) if kw_count > 0 else '제공된 지역과 메뉴를 바탕으로 자연스럽게 작성'}
 
                     [작성 규칙]
                     1. [제목]과 [본문]을 반드시 구분해서 작성하세요.
                     2. [제목]: 30자 내외로 고객의 이목을 끄는 매력적인 제목을 작성하세요. (적절한 이모지 1~2개 포함)
-                    3. [본문]: 위 10개의 키워드를 모두 자연스럽게 문맥에 녹여내어, 매장의 장점이 돋보이도록 300자 ~ 500자 분량으로 길고 상세하게 작성하세요. 고객에게 이야기하듯 친근한 말투를 사용하세요.
+                    3. [본문]: 위 {kw_count}개의 키워드를 모두 자연스럽게 문맥에 녹여내어, 매장의 장점이 돋보이도록 300자 ~ 500자 분량으로 길고 상세하게 작성하세요. 고객에게 이야기하듯 친근한 말투를 사용하세요.
                     4. [강력 경고] 제공된 정보 외에 엉뚱한 정보나 해시태그(#)를 절대 넣지 마세요.
                     """
                     
                     intro_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role, temp=0.4)
                     
-                    # 제목과 본문 분리 파싱
                     title_part = "제목 생성 중..."
                     body_part = intro_res
                     if "[제목]" in intro_res and "[본문]" in intro_res:
@@ -210,14 +197,10 @@ with tab1:
                     display_event = event if event else "없음"
                     st.divider()
                     
-                    def format_search(val):
-                        if isinstance(val, str): return val
-                        return f"{val:,}건"
-
-                    gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between;'><b>🎯 {k['relKeyword']}</b> <span>({format_search(k['total_search'])})</span></li>" for k in g_kws])
-                    detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between;'><b>✨ {k['relKeyword']}</b> <span>({format_search(k['total_search'])})</span></li>" for k in d_kws])
+                    # 5개가 안 채워졌을 때 안내 문구 처리
+                    gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between;'><b>🎯 {k['relKeyword']}</b> <span>({k['total_search']:,}건)</span></li>" for k in g_kws]) if g_kws else "<li style='padding: 12px 0; color:#888;'>검색량이 충분한 키워드가 없습니다.</li>"
+                    detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between;'><b>✨ {k['relKeyword']}</b> <span>({k['total_search']:,}건)</span></li>" for k in d_kws]) if d_kws else "<li style='padding: 12px 0; color:#888;'>검색량이 충분한 키워드가 없습니다.</li>"
                     
-                    # 1.png 스타일을 완벽하게 반영한 깔끔한 UI 생성 (텍스트 복사 영역 제거)
                     html_content = f"""
                     <div id="capture-area" style="padding:25px; background:#ffffff; font-family:'Pretendard', sans-serif; border:1px solid #e9ecef; border-radius:12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
                         <h2 style="margin-bottom:25px; color:#212529; font-weight:800; text-align:center;">위드멤버 플레이스 최적화 리포트</h2>
@@ -240,7 +223,6 @@ with tab1:
                             </div>
                         </div>
                         
-                        <!-- 제목 및 본문 -->
                         <div style="background:#f8f9fa; border-radius:12px; padding:25px; border:1px solid #dee2e6;">
                             <div style="margin-bottom: 20px;">
                                 <h4 style="color:#007bff; margin:0 0 10px 0; font-size:17px; font-weight:700;">📢 추천 새소식 제목</h4>
@@ -286,7 +268,6 @@ with tab2:
         if not review_content: st.warning("리뷰 내용을 입력해주세요!")
         else:
             with st.spinner("사장님의 진심을 담아 정성스럽고 긴 답글을 작성 중입니다..."):
-                # 💡 [핵심 수정] 리뷰 답글을 300자 이상, 매우 상세하고 친절하게 쓰도록 프롬프트 전면 개편
                 system_role = "당신은 매장을 찾아주신 고객에게 진심으로 감사할 줄 아는 따뜻하고 다정한 사장님입니다."
                 prompt = f"""
                 아래 손님이 남겨주신 소중한 방문자 리뷰에 대해, 사장님의 진심이 가득 담긴 정성스러운 답글을 작성해주세요.
@@ -304,11 +285,13 @@ with tab2:
                 """
                 
                 review_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role, temp=0.7)
-                st.success("✨ 사장님의 진심이 담긴 답글이 완성되었습니다!")
                 
-                # 답글도 예쁘게 박스 처리
                 st.markdown(f"""
-                <div style="background-color:#f8f9fa; padding:20px; border-radius:10px; border:1px solid #dee2e6; color:#212529; line-height:1.7; font-size:16px;">
-                    {review_res.replace('\n', '<br>')}
+                <div style="background-color:#ffffff; padding:25px; border-radius:12px; border:1px solid #dee2e6; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-top: 15px;">
+                    <h4 style="color:#007bff; margin-top:0; font-family:'Pretendard', sans-serif;">✨ 사장님의 진심이 담긴 답글</h4>
+                    <hr style="border:0; border-top:1px solid #dee2e6; margin:15px 0;">
+                    <p style="color:#212529; line-height:1.8; font-size:16px; font-family:'Pretendard', sans-serif; word-break: keep-all; margin:0;">
+                        {review_res.replace('\n', '<br>')}
+                    </p>
                 </div>
                 """, unsafe_allow_html=True)
