@@ -22,7 +22,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. 네이버 키워드 추출 엔진 (무조건 5개씩 출력 보장) ---
+# --- 2. 네이버 키워드 추출 엔진 (검색량 높은 순 우선 + 5개 보장) ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -97,29 +97,32 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                 item['is_detail'] = any(x in kw for x in core_men_list + ['회식', '모임', '룸', '데이트', '가족', '핫플', '카페', '점심', '저녁', '추천', '분위기', '가볼만한곳', '코스'])
                 valid_kws.append(item)
                     
-            tier1 = sorted([k for k in valid_kws if 100 <= k['total_search'] <= 1000], key=lambda x: x['total_search'], reverse=True)
-            tier2 = sorted([k for k in valid_kws if (50 <= k['total_search'] <= 3000) and (k not in tier1)], key=lambda x: x['total_search'], reverse=True)
-            final_pool = tier1 + tier2
+            # 💡 [핵심 수정] 100~1000 제한을 없애고 무조건 검색량이 높은 순으로 정렬하여 높은 검색량 키워드 우선 배치
+            valid_kws = sorted(valid_kws, key=lambda x: x['total_search'], reverse=True)
             
-            for kw in final_pool:
+            for kw in valid_kws:
                 if kw['is_detail'] and len(detail_kws) < 5: detail_kws.append(kw)
                 elif not kw['is_detail'] and len(gold_kws) < 5: gold_kws.append(kw)
 
     except Exception:
         pass # 에러 발생 시 아래 강제 채우기 로직으로 넘어감
 
-    # 🚨 무조건 5개를 채우기 위한 강제 보완 로직
-    fallback_generics = ['맛집', '가볼만한곳', '핫플', '추천', '데이트']
+    # 🚨 API 한도 초과나 결과 부족 시 무조건 5개를 채우기 위한 백업 로직
+    fallback_generics = ['맛집', '핫플', '가볼만한곳', '데이트', '추천']
     fallback_details = [fallback_men, '점심', '저녁', '모임', '분위기']
     
     idx = 0
     while len(gold_kws) < 5:
-        gold_kws.append({'relKeyword': f"{fallback_loc} {fallback_generics[idx % len(fallback_generics)]}", 'total_search': 10})
+        kw_str = f"{fallback_loc} {fallback_generics[idx % len(fallback_generics)]}"
+        if not any(k['relKeyword'] == kw_str for k in gold_kws):
+            gold_kws.append({'relKeyword': kw_str, 'total_search': '10 이하'})
         idx += 1
         
     idx = 0
     while len(detail_kws) < 5:
-        detail_kws.append({'relKeyword': f"{fallback_loc} {fallback_details[idx % len(fallback_details)]}", 'total_search': 10})
+        kw_str = f"{fallback_loc} {fallback_details[idx % len(fallback_details)]}"
+        if not any(k['relKeyword'] == kw_str for k in detail_kws):
+            detail_kws.append({'relKeyword': kw_str, 'total_search': '10 이하'})
         idx += 1
         
     return gold_kws[:5], detail_kws[:5], "success"
@@ -207,10 +210,14 @@ with tab1:
                     display_event = event if event else "없음"
                     st.divider()
                     
-                    gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between;'><b>🎯 {k['relKeyword']}</b> <span>({k.get('total_search', 10):,}건)</span></li>" for k in g_kws])
-                    detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between;'><b>✨ {k['relKeyword']}</b> <span>({k.get('total_search', 10):,}건)</span></li>" for k in d_kws])
+                    def format_search(val):
+                        if isinstance(val, str): return val
+                        return f"{val:,}건"
+
+                    gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between;'><b>🎯 {k['relKeyword']}</b> <span>({format_search(k['total_search'])})</span></li>" for k in g_kws])
+                    detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between;'><b>✨ {k['relKeyword']}</b> <span>({format_search(k['total_search'])})</span></li>" for k in d_kws])
                     
-                    # 1.png 스타일을 반영한 깔끔한 UI 생성
+                    # 1.png 스타일을 완벽하게 반영한 깔끔한 UI 생성 (텍스트 복사 영역 제거)
                     html_content = f"""
                     <div id="capture-area" style="padding:25px; background:#ffffff; font-family:'Pretendard', sans-serif; border:1px solid #e9ecef; border-radius:12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
                         <h2 style="margin-bottom:25px; color:#212529; font-weight:800; text-align:center;">위드멤버 플레이스 최적화 리포트</h2>
@@ -233,7 +240,7 @@ with tab1:
                             </div>
                         </div>
                         
-                        <!-- 제목 및 본문 (1.png 스타일 반영) -->
+                        <!-- 제목 및 본문 -->
                         <div style="background:#f8f9fa; border-radius:12px; padding:25px; border:1px solid #dee2e6;">
                             <div style="margin-bottom: 20px;">
                                 <h4 style="color:#007bff; margin:0 0 10px 0; font-size:17px; font-weight:700;">📢 추천 새소식 제목</h4>
@@ -244,7 +251,7 @@ with tab1:
                             
                             <div>
                                 <h4 style="color:#007bff; margin:0 0 10px 0; font-size:17px; font-weight:700;">📝 최적화 본문</h4>
-                                <p style="font-size:16px; line-height:1.75; color:#495057; margin:0;">{body_part.replace('\n', '<br>')}</p>
+                                <p style="font-size:16px; line-height:1.75; color:#495057; margin:0; word-break: keep-all;">{body_part.replace('\n', '<br>')}</p>
                             </div>
                         </div>
                     </div>
@@ -266,7 +273,6 @@ with tab1:
                         }}
                     </script>
                     """
-                    # 본문이 길어졌으므로 height를 넉넉하게 1200으로 설정
                     components.html(html_content, height=1200, scrolling=True)
                 else: 
                     st.error(f"오류: {msg}")
@@ -274,14 +280,35 @@ with tab1:
 with tab2:
     st.header("방문자 리뷰 답글 생성기")
     with st.form("review_form"):
-        review_content = st.text_area("손님이 남긴 리뷰 내용을 입력하세요")
-        submit_review = st.form_submit_button("답글 생성")
+        review_content = st.text_area("손님이 남긴 리뷰 내용을 입력하세요", height=150)
+        submit_review = st.form_submit_button("정성 가득한 답글 생성")
     if submit_review:
         if not review_content: st.warning("리뷰 내용을 입력해주세요!")
         else:
-            with st.spinner("작성 중..."):
-                prompt = f"다음 리뷰에 대해 친절한 사장님 톤으로 답글 써줘. 이모티콘 사용. 해시태그 금지. 리뷰내용: {review_content}"
-                review_res = generate_ai_content(prompt, O_API_KEY)
-                st.success("작성 완료!")
-                st.write(review_res)
-                st.code(review_res)
+            with st.spinner("사장님의 진심을 담아 정성스럽고 긴 답글을 작성 중입니다..."):
+                # 💡 [핵심 수정] 리뷰 답글을 300자 이상, 매우 상세하고 친절하게 쓰도록 프롬프트 전면 개편
+                system_role = "당신은 매장을 찾아주신 고객에게 진심으로 감사할 줄 아는 따뜻하고 다정한 사장님입니다."
+                prompt = f"""
+                아래 손님이 남겨주신 소중한 방문자 리뷰에 대해, 사장님의 진심이 가득 담긴 정성스러운 답글을 작성해주세요.
+
+                [작성 규칙]
+                1. 손님이 남긴 리뷰 내용(메뉴, 맛, 분위기, 서비스 등)을 구체적으로 언급하며 깊은 공감과 감사를 표현하세요.
+                2. 기계적인 답변이 되지 않도록, 최소 300자 이상으로 매우 길고 상세하게 작성해주세요.
+                3. 따뜻하고 친근한 사람의 온기가 느껴지는 말투를 사용하세요. (예: ~했어요, ~랍니다, 정말 감사드려요 등)
+                4. 글의 분위기를 살려주는 예쁘고 다정한 이모티콘을 3~4개 정도 자연스럽게 섞어주세요.
+                5. 다음 방문을 기대하게 만드는 따뜻한 맺음말을 꼭 넣어주세요.
+                6. [절대 금지] 해시태그(#)나 추천 키워드를 의미 없이 나열하지 마세요. 오직 자연스러운 편지 형식이어야 합니다.
+
+                손님의 리뷰 내용:
+                "{review_content}"
+                """
+                
+                review_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role, temp=0.7)
+                st.success("✨ 사장님의 진심이 담긴 답글이 완성되었습니다!")
+                
+                # 답글도 예쁘게 박스 처리
+                st.markdown(f"""
+                <div style="background-color:#f8f9fa; padding:20px; border-radius:10px; border:1px solid #dee2e6; color:#212529; line-height:1.7; font-size:16px;">
+                    {review_res.replace('\n', '<br>')}
+                </div>
+                """, unsafe_allow_html=True)
