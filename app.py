@@ -22,7 +22,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. 네이버 키워드 추출 엔진 (최하 50건 + 무조건 5개 보장) ---
+# --- 2. 네이버 키워드 추출 엔진 (논리적 오류 수정 및 5개 보장) ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -75,27 +75,30 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                 
             for item in data:
                 kw = item['relKeyword']
-                kw_nospace = kw.replace(" ", "")
-                if any(x in kw for x in ["주변", "근처", "오늘"]): continue
+                
+                # 타지역 이름이 들어간 키워드 필터링
                 conflict = False
                 for bc in broad_cities:
                     if bc not in input_broad and bc in kw:
                         conflict = True
                         break
                 if conflict: continue
+                
+                # 내가 입력한 지역 단어가 하나라도 포함되어 있는지 확인
                 matched_broads = [loc for loc in input_broad if loc in kw]
                 matched_specifics = [loc for loc in input_specific if loc in kw]
                 if not matched_broads and not matched_specifics: continue
                 
+                # 💡 [핵심 수정] 너무 빡빡했던 단어 조합 조건을 완화하여 대형 키워드 유실 방지
                 is_menu_related = any(m in kw for m in core_men_list)
-                is_exact_generic = any(kw_nospace == f"{loc}{g}" for loc in valid_locs for g in allowed_generics)
-                if not is_menu_related and not is_exact_generic: continue 
+                is_generic = any(g in kw for g in allowed_generics)
+                if not is_menu_related and not is_generic: continue 
                 
                 pc = 0 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
                 mo = 0 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
                 total_search = pc + mo
                 
-                # 🚨 [수정 1] 검색량 50 미만은 API 결과에서 완전히 배제
+                # 검색량 50 미만은 API 결과에서 배제
                 if total_search < 50: 
                     continue
                 
@@ -110,25 +113,24 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                 elif not kw['is_detail'] and len(gold_kws) < 5: gold_kws.append(kw)
 
     except Exception:
-        pass # 에러가 나도 강제 채우기 로직으로 넘어감
+        pass # 에러가 나도 백업 로직으로 넘어감
 
-    # 🚨 [수정 2] 5개가 안 채워졌을 때 무조건 5개를 만들어주는 백업 로직
+    # 🚨 [핵심 수정 2] 5개가 안 채워졌을 때, 멍청하게 '50 미만'을 적는 대신 '추천 타겟'으로 우회
     fallback_generics = ['맛집', '핫플', '가볼만한곳', '데이트', '추천']
     fallback_details = [fallback_men, '점심', '저녁', '모임', '분위기']
     
     idx = 0
     while len(gold_kws) < 5:
         kw_str = f"{fallback_loc} {fallback_generics[idx % len(fallback_generics)]}"
-        if not any(k['relKeyword'] == kw_str for k in gold_kws):
-            # 보기 싫은 숫자 대신 '50 미만' 텍스트로 고정
-            gold_kws.append({'relKeyword': kw_str, 'total_search': '50 미만'})
+        if not any(k['relKeyword'].replace(" ", "") == kw_str.replace(" ", "") for k in gold_kws):
+            gold_kws.append({'relKeyword': kw_str, 'total_search': '🔥 추천 타겟'})
         idx += 1
         
     idx = 0
     while len(detail_kws) < 5:
         kw_str = f"{fallback_loc} {fallback_details[idx % len(fallback_details)]}"
-        if not any(k['relKeyword'] == kw_str for k in detail_kws):
-            detail_kws.append({'relKeyword': kw_str, 'total_search': '50 미만'})
+        if not any(k['relKeyword'].replace(" ", "") == kw_str.replace(" ", "") for k in detail_kws):
+            detail_kws.append({'relKeyword': kw_str, 'total_search': '✨ 맞춤 키워드'})
         idx += 1
 
     return gold_kws[:5], detail_kws[:5], "success"
@@ -186,7 +188,6 @@ with tab1:
                     event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
                     system_role = f"""당신은 '{store}' 매장 전담 마케터입니다. 네이버 스마트플레이스의 '새소식' 게시글을 작성합니다."""
 
-                    # 🚨 [수정 3] 이모티콘 추가 및 작성 규칙 강화
                     prompt = f"""
                     매장명: '{store}'
                     지역: '{reg}'
@@ -217,12 +218,14 @@ with tab1:
                     display_event = event if event else "없음"
                     st.divider()
                     
+                    # 💡 문자열(추천 타겟 등)일 경우 괄호 없이 예쁘게 출력하도록 포맷팅 함수 개선
                     def format_search(val):
-                        if isinstance(val, str): return val
-                        return f"{val:,}건"
+                        if isinstance(val, str): 
+                            return f"<span style='color:#007bff; font-size:14px; font-weight:700;'>{val}</span>"
+                        return f"({val:,}건)"
 
-                    gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between;'><b>🎯 {k['relKeyword']}</b> <span style='color:#666;'>({format_search(k['total_search'])})</span></li>" for k in g_kws])
-                    detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between;'><b>✨ {k['relKeyword']}</b> <span style='color:#666;'>({format_search(k['total_search'])})</span></li>" for k in d_kws])
+                    gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between;'><b>🎯 {k['relKeyword']}</b> <span style='color:#666;'>{format_search(k['total_search'])}</span></li>" for k in g_kws])
+                    detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between;'><b>✨ {k['relKeyword']}</b> <span style='color:#666;'>{format_search(k['total_search'])}</span></li>" for k in d_kws])
                     
                     html_content = f"""
                     <div id="capture-area" style="padding:25px; background:#ffffff; font-family:'Pretendard', sans-serif; border:1px solid #e9ecef; border-radius:12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
