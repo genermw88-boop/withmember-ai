@@ -22,7 +22,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. 네이버 키워드 추출 엔진 (100% 철벽 방어 로직 적용) ---
+# --- 2. 네이버 키워드 추출 엔진 (메뉴 최우선 로직 적용) ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -48,7 +48,6 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     input_broad = [loc for loc in valid_locs if any(loc.startswith(bc) for bc in broad_cities)]
     input_specifics = [loc for loc in valid_locs if loc not in input_broad]
     
-    # 지역명 파생형 모두 저장 (예: 광진구 -> 광진, 군자역 -> 군자)
     expanded_specifics = []
     for loc in input_specifics:
         expanded_specifics.append(loc)
@@ -59,9 +58,7 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
 
     core_men_list = men.replace(",", " ").split()
     core_men_list = sorted(list(set(core_men_list)), key=len, reverse=True)
-    fallback_men = core_men_list[0] if core_men_list else "맛집"
     
-    # 🚨 [블랙리스트 차단 로직] 메뉴 종류에 따라 엉뚱한 카테고리/월별 키워드 즉시 삭제
     is_cafe = any(c in men for c in ['카페', '커피', '디저트', '베이커리', '빵', '마카롱', '케이크', '다과'])
     forbidden = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월', '여름', '겨울', '봄', '가을', '비오는날', '크리스마스', '연말', '신년']
     
@@ -74,24 +71,18 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     if not is_drink_meat:
         forbidden.extend(['술집', '포차', '호프', '이자카야', '소주', '칵테일', '와인바'])
 
-    # 허용된 안전 명사 및 접미사
     extended_generics = ['맛집', '식당', '밥집', '데이트', '핫플', '가볼만한곳', '추천', '점심', '저녁', '분위기', '데이트코스', '가족식사', '모임장소', '모임', '회식', '술집', '고기집', '고깃집', '외식', '장소', '룸식당', '룸', '코스', '드라이브', '근교', '존맛', '가성비', '근처', '주변', '숨은', '오빠랑', '아이와', '놀거리', '여행', '식사', '야식']
     extended_generics = sorted(list(set(extended_generics)), key=len, reverse=True)
     location_suffixes = ['동', '역', '구', '시', '군', '읍', '면', '리', '길', '마을', '숲', '산', '공원', '대', '단지', '거리', '시장', '해변']
     safe_fluff = ['도', '특별시', '광역시', '의', '과', '와', '가', '찐']
 
-    # 🚨 [수학적 찌꺼기 판별 함수] 
     def is_keyword_valid(kw):
         kw_ns = kw.replace(" ", "")
-        
-        # 1. 블랙리스트 단어가 하나라도 있으면 가차없이 탈락 (ex: 6월, 카페 등)
         if any(f in kw_ns for f in forbidden): return False
-        
         has_specific = any(s in kw_ns for s in expanded_specifics)
         has_broad = any(b in kw_ns for b in input_broad)
         if not has_specific and not has_broad: return False
 
-        # 2. 내 지역, 내 메뉴, 안전명사를 전부 지워봄
         temp = kw_ns
         if has_specific:
             for s in expanded_specifics: temp = temp.replace(s, "")
@@ -102,14 +93,11 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         for g in extended_generics: temp = temp.replace(g, "")
         for f in safe_fluff: temp = temp.replace(f, "")
 
-        # 3. 판별 (찌꺼기가 남았는가?)
         if has_specific:
-            if len(temp) == 0: return True # 완벽 일치 (예: 야탑삼겹살맛집)
-            # 찌꺼기가 1글자인데 단순 접미사('역', '동')면 봐줌 (예: 야탑역 -> 야탑 빼고 '역' 남음)
+            if len(temp) == 0: return True
             if len(temp) == 1 and temp in location_suffixes: return True 
-            return False # 그 외 정자동, 서현역, 숲 등 다른 글자가 남으면 전부 폐기!
+            return False 
         else:
-            # Broad(서울, 경기 등)만 포함된 경우 무조건 찌꺼기 0이어야 함 (서울숲, 경기도용인 전부 탈락)
             if len(temp) == 0: return True
             return False
 
@@ -130,31 +118,43 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                 
             for item in data:
                 kw = item['relKeyword']
-                
-                # 검색량 50 미만은 아예 배제
                 pc = 0 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
                 mo = 0 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
                 total_search = pc + mo
                 if total_search < 50: continue
-                
-                # 🚨 수학적 철벽 필터링 통과 확인
                 if not is_keyword_valid(kw): continue
                 
                 item['total_search'] = total_search
                 item['is_detail'] = any(x in kw for x in core_men_list + ['회식', '모임', '룸', '데이트', '가족', '핫플', '카페', '점심', '저녁', '추천', '분위기', '가볼만한곳', '코스'])
+                
+                # 🚨 [핵심 추가] 내가 입력한 '메뉴'가 직접 포함된 키워드인지 확인
+                item['is_menu'] = any(m in kw for m in core_men_list)
                 valid_kws.append(item)
                     
             valid_kws = sorted(valid_kws, key=lambda x: x['total_search'], reverse=True)
             
-            for kw in valid_kws:
-                if kw['is_detail'] and len(detail_kws) < 5: detail_kws.append(kw)
-                elif not kw['is_detail'] and len(gold_kws) < 5: gold_kws.append(kw)
+            # 🚨 [핵심 수정] 범용 키워드가 메뉴 키워드를 밀어내지 못하게, '메뉴' 키워드를 먼저 뽑아냄!
+            menu_kws = [kw for kw in valid_kws if kw['is_menu']]
+            other_detail_kws = [kw for kw in valid_kws if kw['is_detail'] and not kw['is_menu']]
+            main_kws = [kw for kw in valid_kws if not kw['is_detail']]
+            
+            for kw in main_kws:
+                if len(gold_kws) < 5: gold_kws.append(kw)
+            
+            # 메뉴 키워드 최우선 할당
+            for kw in menu_kws:
+                if len(detail_kws) < 5: detail_kws.append(kw)
+            
+            # 자리가 남으면 범용 상세 키워드 할당
+            for kw in other_detail_kws:
+                if len(detail_kws) < 5: detail_kws.append(kw)
+
     except Exception:
         pass 
 
-    # 부족한 키워드는 '내가 입력한 마지막 지역명'을 토대로만 안전하게 강제 채움
+    # 🚨 [핵심 수정] 백업 로직에서도 입력한 모든 메뉴가 우선적으로 생성되도록 수정
     fallback_generics = ['맛집', '핫플', '가볼만한곳', '데이트', '추천']
-    fallback_details = [fallback_men, '점심', '저녁', '모임', '분위기']
+    fallback_details = core_men_list + ['점심', '저녁', '모임', '분위기']
     
     idx = 0
     while len(gold_kws) < 5:
