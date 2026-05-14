@@ -22,7 +22,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. 네이버 키워드 추출 엔진 (논리적 오류 수정 및 5개 보장) ---
+# --- 2. 네이버 키워드 추출 엔진 (지역명 100% 일치 보장 + 50건 이상) ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -42,11 +42,25 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
 
     valid_locs = [p for p in reg_parts if len(p) >= 2]
     if not valid_locs: valid_locs = reg_parts
-    fallback_loc = valid_locs[0] if valid_locs else "지역"
+    
+    # 🚨 [핵심 수정 1] 백업용 지역을 '가장 세부적인 지역(마지막 단어)'으로 강제 고정 (예: 인천 중구 '운서동')
+    fallback_loc = valid_locs[-1] if valid_locs else "지역"
+    if len(fallback_loc) >= 3 and fallback_loc.endswith(('동', '역', '읍', '면')):
+        fallback_loc_stem = fallback_loc[:-1] # 운서동 -> 운서 (확장성)
+    else:
+        fallback_loc_stem = fallback_loc
 
     broad_cities = ["서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "제주", "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남"]
     input_broad = [loc for loc in valid_locs if any(loc.startswith(bc) for bc in broad_cities)]
-    input_specific = [loc for loc in valid_locs if loc not in input_broad]
+    
+    # 🚨 [핵심 수정 2] 내가 입력한 지역 단어 파생형 생성 (이 단어가 없으면 키워드 무조건 탈락)
+    exact_locs = []
+    for loc in valid_locs:
+        exact_locs.append(loc)
+        if len(loc) >= 3 and loc[-1] in ['동', '역', '구', '시', '군', '읍', '면', '리']:
+            exact_locs.append(loc[:-1])
+    exact_locs = list(set(exact_locs))
+
     core_men_list = men.replace(",", " ").split()
     fallback_men = core_men_list[0] if core_men_list else "맛집"
     
@@ -76,7 +90,7 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             for item in data:
                 kw = item['relKeyword']
                 
-                # 타지역 이름이 들어간 키워드 필터링
+                # 타지역 이름이 들어간 키워드 가차없이 차단
                 conflict = False
                 for bc in broad_cities:
                     if bc not in input_broad and bc in kw:
@@ -84,12 +98,11 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                         break
                 if conflict: continue
                 
-                # 내가 입력한 지역 단어가 하나라도 포함되어 있는지 확인
-                matched_broads = [loc for loc in input_broad if loc in kw]
-                matched_specifics = [loc for loc in input_specific if loc in kw]
-                if not matched_broads and not matched_specifics: continue
+                # 🚨 [핵심 수정 3] 키워드 안에 내가 입력한 지역 단어가 하나라도 안 들어있으면 즉시 버림!
+                is_loc_matched = any(eloc in kw for eloc in exact_locs)
+                if not is_loc_matched: 
+                    continue
                 
-                # 💡 [핵심 수정] 너무 빡빡했던 단어 조합 조건을 완화하여 대형 키워드 유실 방지
                 is_menu_related = any(m in kw for m in core_men_list)
                 is_generic = any(g in kw for g in allowed_generics)
                 if not is_menu_related and not is_generic: continue 
@@ -98,7 +111,7 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                 mo = 0 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
                 total_search = pc + mo
                 
-                # 검색량 50 미만은 API 결과에서 배제
+                # 검색량 50 미만은 무조건 배제
                 if total_search < 50: 
                     continue
                 
@@ -113,9 +126,9 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                 elif not kw['is_detail'] and len(gold_kws) < 5: gold_kws.append(kw)
 
     except Exception:
-        pass # 에러가 나도 백업 로직으로 넘어감
+        pass 
 
-    # 🚨 [핵심 수정 2] 5개가 안 채워졌을 때, 멍청하게 '50 미만'을 적는 대신 '추천 타겟'으로 우회
+    # 🚨 [핵심 수정 4] 부족한 키워드는 '입력한 세부 지역명(fallback_loc)'을 기반으로만 생성
     fallback_generics = ['맛집', '핫플', '가볼만한곳', '데이트', '추천']
     fallback_details = [fallback_men, '점심', '저녁', '모임', '분위기']
     
@@ -128,7 +141,8 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         
     idx = 0
     while len(detail_kws) < 5:
-        kw_str = f"{fallback_loc} {fallback_details[idx % len(fallback_details)]}"
+        # 메뉴명 등의 조합은 '운서 삼겹살' 처럼 '동'을 떼고 붙여도 자연스러움
+        kw_str = f"{fallback_loc_stem} {fallback_details[idx % len(fallback_details)]}"
         if not any(k['relKeyword'].replace(" ", "") == kw_str.replace(" ", "") for k in detail_kws):
             detail_kws.append({'relKeyword': kw_str, 'total_search': '✨ 맞춤 키워드'})
         idx += 1
@@ -218,7 +232,6 @@ with tab1:
                     display_event = event if event else "없음"
                     st.divider()
                     
-                    # 💡 문자열(추천 타겟 등)일 경우 괄호 없이 예쁘게 출력하도록 포맷팅 함수 개선
                     def format_search(val):
                         if isinstance(val, str): 
                             return f"<span style='color:#007bff; font-size:14px; font-weight:700;'>{val}</span>"
