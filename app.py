@@ -22,7 +22,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. 네이버 키워드 추출 엔진 (지역명 100% 일치 보장 + 50건 이상) ---
+# --- 2. 네이버 키워드 추출 엔진 (타 지역명 철벽 차단 로직 적용) ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -42,24 +42,26 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
 
     valid_locs = [p for p in reg_parts if len(p) >= 2]
     if not valid_locs: valid_locs = reg_parts
-    
-    # 🚨 [핵심 수정 1] 백업용 지역을 '가장 세부적인 지역(마지막 단어)'으로 강제 고정 (예: 인천 중구 '운서동')
     fallback_loc = valid_locs[-1] if valid_locs else "지역"
-    if len(fallback_loc) >= 3 and fallback_loc.endswith(('동', '역', '읍', '면')):
-        fallback_loc_stem = fallback_loc[:-1] # 운서동 -> 운서 (확장성)
-    else:
-        fallback_loc_stem = fallback_loc
 
     broad_cities = ["서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "제주", "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남"]
     input_broad = [loc for loc in valid_locs if any(loc.startswith(bc) for bc in broad_cities)]
     
-    # 🚨 [핵심 수정 2] 내가 입력한 지역 단어 파생형 생성 (이 단어가 없으면 키워드 무조건 탈락)
-    exact_locs = []
+    # 🚨 [핵심 필터 1] 입력된 지역명을 쪼개서 모든 형태(동/역/구)로 확장 기록
+    expanded_locs = []
+    suffixes = ['동', '역', '구', '시', '군', '읍', '면', '리', '길', '도']
     for loc in valid_locs:
-        exact_locs.append(loc)
-        if len(loc) >= 3 and loc[-1] in ['동', '역', '구', '시', '군', '읍', '면', '리']:
-            exact_locs.append(loc[:-1])
-    exact_locs = list(set(exact_locs))
+        expanded_locs.append(loc)
+        # 끝에 접미사가 있으면 떼어낸 원형도 추가 (예: 야탑동 -> 야탑)
+        if len(loc) >= 2 and loc[-1] in suffixes:
+            stem = loc[:-1]
+            expanded_locs.append(stem)
+        else:
+            stem = loc
+        # 원형에 모든 접미사 붙여서 추가
+        for suf in suffixes:
+            expanded_locs.append(stem + suf)
+    expanded_locs = list(set(expanded_locs))
 
     core_men_list = men.replace(",", " ").split()
     fallback_men = core_men_list[0] if core_men_list else "맛집"
@@ -89,8 +91,11 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                 
             for item in data:
                 kw = item['relKeyword']
+                kw_nospace = kw.replace(" ", "")
                 
-                # 타지역 이름이 들어간 키워드 가차없이 차단
+                if any(x in kw for x in ["주변", "근처", "오늘"]): continue
+
+                # 아예 다른 대도시 차단
                 conflict = False
                 for bc in broad_cities:
                     if bc not in input_broad and bc in kw:
@@ -98,20 +103,34 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                         break
                 if conflict: continue
                 
-                # 🚨 [핵심 수정 3] 키워드 안에 내가 입력한 지역 단어가 하나라도 안 들어있으면 즉시 버림!
-                is_loc_matched = any(eloc in kw for eloc in exact_locs)
+                # 내가 입력한 지역 단어가 하나라도 있는지 1차 확인
+                is_loc_matched = any(eloc in kw for eloc in expanded_locs)
                 if not is_loc_matched: 
                     continue
+                    
+                # 🚨 [핵심 필터 2] 내가 입력하지 않은 '다른 동/역' 침범 완벽 차단 로직
+                temp_kw = kw_nospace
+                # 글자 수가 긴 지역명부터 키워드에서 지워나감
+                sorted_locs = sorted(expanded_locs + broad_cities, key=len, reverse=True)
+                for loc in sorted_locs:
+                    temp_kw = temp_kw.replace(loc, "")
                 
-                is_menu_related = any(m in kw for m in core_men_list)
-                is_generic = any(g in kw for g in allowed_generics)
-                if not is_menu_related and not is_generic: continue 
+                for m in core_men_list:
+                    temp_kw = temp_kw.replace(m, "")
+                    
+                extended_generics = allowed_generics + ['맛집', '추천', '데이트', '핫플', '가볼만한곳', '점심', '저녁', '분위기', '룸식당', '룸', '코스', '가족식사', '모임장소', '회식', '술집', '카페', '디저트', '고기집', '밥집', '식당', '외식', '장소']
+                extended_generics = sorted(list(set(extended_generics)), key=len, reverse=True)
+                for g in extended_generics:
+                    temp_kw = temp_kw.replace(g, "")
                 
+                # 허용된 지역/메뉴/명사를 다 지웠는데도 '동, 역, 구' 글자가 남아있다? -> 정자동, 서현역 같은 다른 동네임! 즉시 버림.
+                if any(char in temp_kw for char in suffixes):
+                    continue 
+
+                # 검색량 50 미만은 아예 배제
                 pc = 0 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
                 mo = 0 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
                 total_search = pc + mo
-                
-                # 검색량 50 미만은 무조건 배제
                 if total_search < 50: 
                     continue
                 
@@ -128,7 +147,7 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     except Exception:
         pass 
 
-    # 🚨 [핵심 수정 4] 부족한 키워드는 '입력한 세부 지역명(fallback_loc)'을 기반으로만 생성
+    # 부족한 키워드는 '내가 입력한 마지막 지역명'을 토대로만 강제 채움
     fallback_generics = ['맛집', '핫플', '가볼만한곳', '데이트', '추천']
     fallback_details = [fallback_men, '점심', '저녁', '모임', '분위기']
     
@@ -141,8 +160,7 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         
     idx = 0
     while len(detail_kws) < 5:
-        # 메뉴명 등의 조합은 '운서 삼겹살' 처럼 '동'을 떼고 붙여도 자연스러움
-        kw_str = f"{fallback_loc_stem} {fallback_details[idx % len(fallback_details)]}"
+        kw_str = f"{fallback_loc} {fallback_details[idx % len(fallback_details)]}"
         if not any(k['relKeyword'].replace(" ", "") == kw_str.replace(" ", "") for k in detail_kws):
             detail_kws.append({'relKeyword': kw_str, 'total_search': '✨ 맞춤 키워드'})
         idx += 1
