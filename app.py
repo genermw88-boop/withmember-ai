@@ -22,7 +22,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. [완벽 개선] 100% 화이트리스트 기반 추출 엔진 ---
+# --- 2. [완벽 개선] 입력된 메뉴 기반 100% 맞춤 추출 엔진 ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -50,16 +50,24 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
 
     core_men_list = men.replace(",", " ").split()
     
-    # 💡 [핵심 스마트 분류] 메뉴 특성에 따른 속성 정의 (술/회식 키워드 원천 차단용)
+    # 💡 [핵심 스마트 분류] 메뉴 특성에 따른 속성 정의 (사주/타로 등 비음식점 완벽 대응)
     is_cafe = any(c in men for c in ['카페', '커피', '디저트', '베이커리', '빵', '마카롱', '케이크', '다과'])
     is_snack = any(s in men for s in ['김밥', '분식', '떡볶이', '유부초밥', '돈까스', '라면', '혼밥', '우동'])
     is_drink_meat = any(d in men for d in ['술', '맥주', '소주', '포차', '고기', '삼겹살', '곱창', '막창', '안주'])
     
+    # 식당업종인지 판별 (사주, 타로, 뷰티, 헬스 등 비음식점은 False가 됨)
+    is_food_biz = is_cafe or is_snack or is_drink_meat or any(f in men for f in ['식당', '밥', '찌개', '탕', '구이', '고기', '회', '초밥', '면', '맛집'])
+
     hints_list = []
     for loc in reversed(valid_locs):
-        hints_list.append(f"{loc}맛집")
-        for m in core_men_list[:2]:
+        # 💡 [핵심 변경] 입력한 메뉴를 1순위로 무조건 검색에 포함
+        for m in core_men_list[:3]:
             hints_list.append(f"{loc}{m}")
+            
+        # 음식점일 경우에만 '맛집'을 검색 힌트에 추가
+        if is_food_biz:
+            hints_list.append(f"{loc}맛집")
+            
         if len(hints_list) >= 5: break
     
     params = {'hintKeywords': ",".join(hints_list[:5]), 'showDetail': 1}
@@ -71,13 +79,16 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         data = res.json().get('keywordList', [])
         valid_kws = []
         
-        # 메뉴에 따른 허용 일반명사 동적 생성
-        allowed_generics = ['맛집', '식당', '밥집', '데이트', '핫플', '가볼만한곳', '추천', '점심', '저녁', '분위기', '데이트코스', '가족식사']
-        if is_cafe:
-            allowed_generics.extend(['카페', '디저트'])
-        # 분식/카페가 아닐 때만 술집, 회식 허용
-        if not is_cafe and not is_snack:
-            allowed_generics.extend(['술집', '회식', '모임장소', '모임', '가족모임'])
+        # 💡 [메뉴에 따른 허용 키워드 동적 생성]
+        if is_food_biz:
+            allowed_generics = ['맛집', '식당', '밥집', '데이트', '핫플', '가볼만한곳', '추천', '점심', '저녁', '분위기', '데이트코스', '가족식사']
+            if is_cafe:
+                allowed_generics.extend(['카페', '디저트'])
+            if not is_cafe and not is_snack:
+                allowed_generics.extend(['술집', '회식', '모임장소', '모임', '가족모임'])
+        else:
+            # 사주, 타로, 헬스장 등 비음식점 전용 일반 키워드
+            allowed_generics = ['데이트', '핫플', '가볼만한곳', '추천', '분위기', '데이트코스', '예약', '잘하는곳']
             
         for item in data:
             kw = item['relKeyword']
@@ -106,7 +117,7 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                 if any(char in temp_kw for char in ['동', '구', '역', '길', '리', '읍', '면']):
                     continue
 
-            # 🚨 [규칙 3: 화이트리스트] 메뉴 포함 또는 허용된 제네릭 키워드만 통과
+            # 🚨 [규칙 3: 화이트리스트] 입력한 메뉴 포함 또는 허용된 제네릭 키워드만 통과
             is_menu_related = any(m in kw for m in core_men_list)
             is_exact_generic = False
             
@@ -124,13 +135,15 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
             total_search = pc + mo
             
-            is_detail = any(x in kw for x in core_men_list + ['회식', '모임', '룸', '데이트', '가족', '핫플', '카페', '점심', '저녁', '추천', '분위기', '가볼만한곳', '코스'])
+            # 💡 [핵심 변경] 입력한 메뉴 단어 자체가 들어간 키워드는 메인(Main)으로 가도록 조건 수정
+            detail_keywords_list = ['회식', '모임', '룸', '데이트', '가족', '핫플', '카페', '점심', '저녁', '추천', '분위기', '가볼만한곳', '코스', '예약', '잘하는곳', '디저트']
+            is_detail = any(x in kw for x in detail_keywords_list)
             
             item['total_search'] = total_search
             item['is_detail'] = is_detail
             valid_kws.append(item)
                 
-        # 100~1000건 필터링 
+        # 검색량 기반 정렬
         tier1 = sorted([k for k in valid_kws if 100 <= k['total_search'] <= 1000], key=lambda x: x['total_search'], reverse=True)
         tier2 = sorted([k for k in valid_kws if (50 <= k['total_search'] <= 3000) and (k not in tier1)], key=lambda x: x['total_search'], reverse=True)
         tier3 = sorted([k for k in valid_kws if k not in tier1 and k not in tier2], key=lambda x: x['total_search'], reverse=True)
@@ -148,23 +161,34 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             if len(gold_kws) < 5 and kw not in gold_kws and kw not in detail_kws: gold_kws.append(kw)
             if len(detail_kws) < 5 and kw not in gold_kws and kw not in detail_kws: detail_kws.append(kw)
                 
-        # 💡 [수정된 핵심 보완] 분식, 카페, 일반식당에 따라 부족한 빈칸을 완벽하게 맞춤 생성
+        # 💡 [완벽 해결] 사주/타로 등 비음식점 메뉴가 100% 빈칸을 채우도록 강제 할당 로직
         fb_mains = []
         fb_details = []
         
         for loc in reversed(valid_locs):
-            fb_mains.append(f"{loc}{core_men_list[0]}")
-            fb_mains.append(f"{loc}맛집" if not is_cafe else f"{loc}카페")
+            # 1순위: 무조건 사용자가 입력한 메뉴를 1순위 메인 키워드로 등록
+            for m in core_men_list:
+                fb_mains.append(f"{loc}{m}")
             
-            if is_cafe:
-                fb_details.extend([f"{loc}디저트", f"{loc}데이트", f"{loc}분위기", f"{loc}핫플", f"{loc}추천"])
-            elif is_snack: # 분식/김밥류일 경우 절대 술/회식을 넣지 않음
-                fb_details.extend([f"{loc}밥집", f"{loc}점심", f"{loc}혼밥", f"{loc}분식", f"{loc}추천"])
-            elif is_drink_meat:
-                fb_details.extend([f"{loc}술집", f"{loc}회식", f"{loc}모임장소", f"{loc}핫플", f"{loc}추천"])
+            # 2순위: 업종별 보조 키워드
+            if is_food_biz:
+                fb_mains.append(f"{loc}맛집" if not is_cafe else f"{loc}카페")
+                
+                if is_cafe:
+                    fb_details.extend([f"{loc}디저트", f"{loc}데이트", f"{loc}분위기", f"{loc}핫플", f"{loc}추천"])
+                elif is_snack: 
+                    fb_details.extend([f"{loc}밥집", f"{loc}점심", f"{loc}혼밥", f"{loc}분식", f"{loc}추천"])
+                elif is_drink_meat:
+                    fb_details.extend([f"{loc}술집", f"{loc}회식", f"{loc}모임장소", f"{loc}핫플", f"{loc}추천"])
+                else:
+                    fb_details.extend([f"{loc}밥집", f"{loc}모임", f"{loc}점심", f"{loc}저녁", f"{loc}추천"])
             else:
-                fb_details.extend([f"{loc}밥집", f"{loc}모임", f"{loc}점심", f"{loc}저녁", f"{loc}추천"])
+                # 비음식점(사주, 타로 등)인 경우 '맛집' 등을 넣지 않고 범용 방문 키워드 조합
+                if len(core_men_list) > 1:
+                    fb_details.append(f"{loc}{core_men_list[1]}")
+                fb_details.extend([f"{loc}데이트", f"{loc}핫플", f"{loc}가볼만한곳", f"{loc}추천", f"{loc}잘하는곳"])
             
+        # 남은 빈칸 강제 채우기
         for fb in fb_mains:
             if len(gold_kws) >= 5: break
             if not any(k['relKeyword'] == fb for k in gold_kws + detail_kws):
@@ -180,7 +204,7 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     except Exception as e:
         return [], [], f"시스템 에러: {str(e)}"
 
-# --- 3. OpenAI 카피라이팅 함수 (Temperature 및 System Role 제어 추가) ---
+# --- 3. OpenAI 카피라이팅 함수 ---
 def generate_ai_content(prompt, api_key, system_role="당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다.", temp=0.7):
     try:
         client = OpenAI(api_key=api_key)
@@ -234,12 +258,10 @@ with tab1:
                     all_real_kws = [k['relKeyword'] for k in g_kws + d_kws]
                     event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
                     
-                    # 💡 [강력 제어] 시스템 프롬프트 명확화
                     system_role = f"""당신은 '{store}' 매장 전담 마케터입니다. 
                     반드시 사용자가 제공한 지역, 메뉴, 이벤트 정보만을 기반으로 철저하게 사실만을 작성해야 합니다. 
-                    사용자가 언급하지 않은 상황(예: 회식, 술자리, 단체 모임 등)이나 타겟 고객층을 임의로 지어내는 환각(Hallucination) 행위를 절대 엄금합니다."""
+                    사용자가 언급하지 않은 상황이나 타겟 고객층을 임의로 지어내는 환각(Hallucination) 행위를 절대 엄금합니다."""
 
-                    # 💡 [수정 내용] 필수 반영 타겟 키워드가 본문에 철저하게 포함되도록 프롬프트 지시어 강화
                     prompt = f"""
                     매장명: '{store}'
                     지역: '{reg}'
@@ -260,10 +282,8 @@ with tab1:
                     8. [강력 경고] 글 마지막에 해시태그(#)를 달거나, 추천 키워드 목록을 따로 출력하지 마세요. 본문 문장 내에 키워드가 들어가야 합니다.
                     """
                     
-                    # 💡 [강력 제어] Temperature를 0.2로 낮추어 창의성 억제 및 통제력 강화
                     intro_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role, temp=0.2)
                     
-                    # 💡 [제목/본문 파싱 처리] HTML 박스 안에 제목이 예쁘게 들어가도록 분리
                     title_part = ""
                     body_part = intro_res
                     if "[제목]" in intro_res and "[본문]" in intro_res:
@@ -378,7 +398,6 @@ with tab2:
             st.warning("리뷰 내용을 입력해주세요!")
         else:
             with st.spinner("정성스러운 답글을 작성 중..."):
-                # 리뷰 답글은 기존 온도(0.7) 및 기본 프롬프트 유지
                 prompt = f"다음 손님의 리뷰에 대해 친절하고 감사해하는 사장님 톤으로 답글을 써줘. 친근한 이모티콘 듬뿍 써줘. [절대 금지] 글 마지막에 해시태그(#)를 달거나 키워드를 따로 나열하지 마세요. 오직 답글 본문만 작성하세요. 리뷰내용: {review_content}"
                 review_res = generate_ai_content(prompt, O_API_KEY)
                 st.success("작성된 답글:")
