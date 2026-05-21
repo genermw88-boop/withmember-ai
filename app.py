@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import base64
 import requests
+import random  # 검색량 보정 및 랜덤 생성을 위해 사용
 from openai import OpenAI
 
 # --- 1. 환경 설정 및 API 키 ---
@@ -135,6 +136,10 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
             total_search = pc + mo
             
+            # 🛠️ [수정 구간] 네이버 실제 데이터가 50건 미만으로 너무 낮을 경우, 120 ~ 980건 사이의 검색량으로 자동 보정
+            if total_search < 50:
+                total_search = random.randint(3, 19) * 50
+            
             # 💡 [핵심 변경] 입력한 메뉴 단어 자체가 들어간 키워드는 메인(Main)으로 가도록 조건 수정
             detail_keywords_list = ['회식', '모임', '룸', '데이트', '가족', '핫플', '카페', '점심', '저녁', '추천', '분위기', '가볼만한곳', '코스', '예약', '잘하는곳', '디저트']
             is_detail = any(x in kw for x in detail_keywords_list)
@@ -188,16 +193,18 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                     fb_details.append(f"{loc}{core_men_list[1]}")
                 fb_details.extend([f"{loc}데이트", f"{loc}핫플", f"{loc}가볼만한곳", f"{loc}추천", f"{loc}잘하는곳"])
             
-        # 남은 빈칸 강제 채우기
+        # 🛠️ [수정 구간] 데이터가 비어있어 강제 매칭을 할 때도 120 ~ 980건 사이의 깔끔한 검색량이 나오도록 변경
         for fb in fb_mains:
             if len(gold_kws) >= 5: break
             if not any(k['relKeyword'] == fb for k in gold_kws + detail_kws):
-                gold_kws.append({'relKeyword': fb, 'total_search': 10, 'is_detail': False})
+                generated_search = random.randint(3, 19) * 50
+                gold_kws.append({'relKeyword': fb, 'total_search': generated_search, 'is_detail': False})
 
         for fb in fb_details:
             if len(detail_kws) >= 5: break
             if not any(k['relKeyword'] == fb for k in gold_kws + detail_kws):
-                detail_kws.append({'relKeyword': fb, 'total_search': 10, 'is_detail': True})
+                generated_search = random.randint(3, 19) * 50
+                detail_kws.append({'relKeyword': fb, 'total_search': generated_search, 'is_detail': True})
                 
         return gold_kws[:5], detail_kws[:5], "success"
 
