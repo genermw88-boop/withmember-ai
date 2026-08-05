@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import base64
 import requests
-import random  # 검색량 랜덤 생성을 위해 사용
+import random
 from openai import OpenAI
 
 # --- 1. 환경 설정 및 API 키 ---
@@ -23,7 +23,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. 입력된 메뉴 기반 100% 맞춤 추출 엔진 ---
+# --- 2. 네이버 키워드 추출 엔진 ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -37,7 +37,6 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         'X-Signature': signature
     }
     
-    # 1. 입력된 지역 단어 모두 추출
     reg_parts = reg.strip().split()
     if not reg_parts:
         return [], [], "지역명을 올바르게 입력해주세요."
@@ -51,7 +50,6 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
 
     core_men_list = men.replace(",", " ").split()
     
-    # 스마트 업종 분류
     is_cafe = any(c in men for c in ['카페', '커피', '디저트', '베이커리', '빵', '마카롱', '케이크', '다과'])
     is_snack = any(s in men for s in ['김밥', '분식', '떡볶이', '유부초밥', '돈까스', '라면', '혼밥', '우동'])
     is_drink_meat = any(d in men for d in ['술', '맥주', '소주', '포차', '고기', '삼겹살', '곱창', '막창', '안주'])
@@ -78,10 +76,8 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         
         if is_food_biz:
             allowed_generics = ['맛집', '식당', '밥집', '데이트', '핫플', '가볼만한곳', '추천', '점심', '저녁', '분위기', '데이트코스', '가족식사']
-            if is_cafe:
-                allowed_generics.extend(['카페', '디저트'])
-            if not is_cafe and not is_snack:
-                allowed_generics.extend(['술집', '회식', '모임장소', '모임', '가족모임'])
+            if is_cafe: allowed_generics.extend(['카페', '디저트'])
+            if not is_cafe and not is_snack: allowed_generics.extend(['술집', '회식', '모임장소', '모임', '가족모임'])
         else:
             allowed_generics = ['데이트', '핫플', '가볼만한곳', '추천', '분위기', '데이트코스', '예약', '잘하는곳']
             
@@ -105,10 +101,8 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                 temp_kw = kw_nospace
                 for bc in matched_broads: temp_kw = temp_kw.replace(bc, "")
                 for m in core_men_list: temp_kw = temp_kw.replace(m, "")
-                for sw in allowed_generics:
-                    temp_kw = temp_kw.replace(sw, "")
-                if any(char in temp_kw for char in ['동', '구', '역', '길', '리', '읍', '면']):
-                    continue
+                for sw in allowed_generics: temp_kw = temp_kw.replace(sw, "")
+                if any(char in temp_kw for char in ['동', '구', '역', '길', '리', '읍', '면']): continue
 
             is_menu_related = any(m in kw for m in core_men_list)
             is_exact_generic = False
@@ -120,8 +114,7 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                         break
                 if is_exact_generic: break
                 
-            if not is_menu_related and not is_exact_generic:
-                continue 
+            if not is_menu_related and not is_exact_generic: continue 
             
             pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
             mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
@@ -158,35 +151,26 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         fb_details = []
         
         for loc in reversed(valid_locs):
-            for m in core_men_list:
-                fb_mains.append(f"{loc}{m}")
-            
+            for m in core_men_list: fb_mains.append(f"{loc}{m}")
             if is_food_biz:
                 fb_mains.append(f"{loc}맛집" if not is_cafe else f"{loc}카페")
-                if is_cafe:
-                    fb_details.extend([f"{loc}디저트", f"{loc}데이트", f"{loc}분위기", f"{loc}핫플", f"{loc}추천"])
-                elif is_snack: 
-                    fb_details.extend([f"{loc}밥집", f"{loc}점심", f"{loc}혼밥", f"{loc}분식", f"{loc}추천"])
-                elif is_drink_meat:
-                    fb_details.extend([f"{loc}술집", f"{loc}회식", f"{loc}모임장소", f"{loc}핫플", f"{loc}추천"])
-                else:
-                    fb_details.extend([f"{loc}밥집", f"{loc}모임", f"{loc}점심", f"{loc}저녁", f"{loc}추천"])
+                if is_cafe: fb_details.extend([f"{loc}디저트", f"{loc}데이트", f"{loc}분위기", f"{loc}핫플", f"{loc}추천"])
+                elif is_snack: fb_details.extend([f"{loc}밥집", f"{loc}점심", f"{loc}혼밥", f"{loc}분식", f"{loc}추천"])
+                elif is_drink_meat: fb_details.extend([f"{loc}술집", f"{loc}회식", f"{loc}모임장소", f"{loc}핫플", f"{loc}추천"])
+                else: fb_details.extend([f"{loc}밥집", f"{loc}모임", f"{loc}점심", f"{loc}저녁", f"{loc}추천"])
             else:
-                if len(core_men_list) > 1:
-                    fb_details.append(f"{loc}{core_men_list[1]}")
+                if len(core_men_list) > 1: fb_details.append(f"{loc}{core_men_list[1]}")
                 fb_details.extend([f"{loc}데이트", f"{loc}핫플", f"{loc}가볼만한곳", f"{loc}추천", f"{loc}잘하는곳"])
             
         for fb in fb_mains:
             if len(gold_kws) >= 5: break
             if not any(k['relKeyword'] == fb for k in gold_kws + detail_kws):
-                generated_search = random.randint(153, 9874)
-                gold_kws.append({'relKeyword': fb, 'total_search': generated_search, 'is_detail': False})
+                gold_kws.append({'relKeyword': fb, 'total_search': random.randint(153, 9874), 'is_detail': False})
 
         for fb in fb_details:
             if len(detail_kws) >= 5: break
             if not any(k['relKeyword'] == fb for k in gold_kws + detail_kws):
-                generated_search = random.randint(153, 9874)
-                detail_kws.append({'relKeyword': fb, 'total_search': generated_search, 'is_detail': True})
+                detail_kws.append({'relKeyword': fb, 'total_search': random.randint(153, 9874), 'is_detail': True})
                 
         return gold_kws[:5], detail_kws[:5], "success"
 
@@ -194,7 +178,7 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         return [], [], f"시스템 에러: {str(e)}"
 
 # --- 3. OpenAI 카피라이팅 함수 ---
-def generate_ai_content(prompt, api_key, system_role="당신은 상위 1% 플레이스 마케팅 전문 카피라이터입니다.", temp=0.7):
+def generate_ai_content(prompt, api_key, system_role="", temp=0.4):
     try:
         client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
@@ -245,55 +229,62 @@ with tab1:
                 
                 if msg == "success":
                     all_real_kws = [k['relKeyword'] for k in g_kws + d_kws]
-                    event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 별도 진행 이벤트 없음"
+                    has_event = bool(event and event.strip())
                     
-                    # 💡 [사장님 1인칭 시점 롤 부여]
-                    system_role = f"""당신은 '{store}' 매장을 직접 운영하는 사장님(대표)입니다. 
-                    3자 마케터의 입장이 아니라, 사장님이 직접 고객에게 다정하고 정중하게 인사를 건네는 1인칭 시점('저희 매장', '저희 집 인기 메뉴', '정성껏 모시겠습니다')으로 작성해야 합니다. 
-                    사용자가 입력한 지역, 메뉴, 이벤트 정보만을 기반으로 풍성하고 정성스러운 새소식 글을 작성하세요."""
+                    # 💡 [핵심 개선] 사장님 1인칭 및 가식 없는 자연스러운 어조 강제
+                    system_role = f"""당신은 '{store}' 매장을 운영하는 사장님입니다.
+3자 마케터처럼 딱딱하거나 AI 티 나는 어색한 문장을 쓰지 말고, 진짜 사장님이 손님에게 다정하게 이야기하듯 1인칭 시점('저희 집', '모시겠습니다')으로 작성하세요.
+절대로 문단을 통째로 뭉쳐 쓰지 말고, 문단과 문단 사이에 엔터 두 번(\\n\\n)을 넣어 확연히 구분해 작성하세요."""
 
-                    # 💡 [분량 확장을 위한 세부 프롬프트 개선]
+                    # 💡 [핵심 개선] 문단 구분 및 예시 레이아웃 강제 반영
                     prompt = f"""
-                    [매장 정보]
-                    - 매장명: '{store}'
-                    - 지역: '{reg}'
-                    - 주력메뉴: '{men}'
-                    - {event_instruction}
-                    
-                    [참고 타겟 키워드 목록]
-                    {', '.join(all_real_kws)}
+[매장 정보]
+- 매장명: '{store}'
+- 지역: '{reg}'
+- 주력메뉴: '{men}'
+- 이벤트: '{event if has_event else "진행 중인 이벤트 없음"}'
 
-                    [작성 규격 및 구성 규칙]
-                    1. **[제목]**과 **[본문]** 구조를 반드시 유지하세요.
-                    2. **[제목]**: 20~30자 내외로 고객의 식욕이나 호기심을 자극하는 질문형/추천형 제목을 만드세요. (친근한 이모티콘 포함)
-                    3. **[본문 분량]**: 공백 포함 **300자 ~ 400자 내외로 충분히 길고 정성스럽게** 아래 요소들을 풀어 쓰세요.
-                    4. **[본문 필수 포함 요소]**:
-                       - **매장 인사**: "{reg} 맛집 '{store}'입니다."로 다정하게 매장을 여는 인사
-                       - **메뉴 매력 묘사**: 주력 메뉴({men})의 고소함, 풍미, 조합, 식감 등을 구체적이고 맛깔스럽게 자랑 어필
-                       - **이벤트/혜택 안내**: {event_instruction} 내용을 바탕으로 방문 고객에게 감사 마음과 혜택(음료 서비스 등) 전달
-                       - **정성스러운 마무리**: 기분 좋은 한 끼를 대접하겠다는 진심 어린 마무리 인사와 방문 유도
-                    5. **[SEO 자연스러운 녹이기]**: 타겟 키워드 중 2~3개를 어색하지 않게 문맥 속에 포함하세요.
-                    6. **[제약 사항]**: 
-                       - 본문 내 텍스트에 마크다운 볼드 기호(**)를 절대 넣지 마세요!
-                       - 글 끝에 해시태그(#)나 추천 키워드를 별도로 나열하지 마세요.
-                       - 제공된 정보 외의 가짜 사실은 지어내지 마세요.
+[참고 타겟 키워드]
+{', '.join(all_real_kws)}
 
-                    [가장 이상적인 출력 예시 - 분량 및 톤앤매너 완벽 모방]
-                    [제목] 오늘 점심은 식사동 미식로그에서 고소한 들기름모밀 어떠세요? 😋✨
-                    [본문] 고양시 일산동구 식사동 맛집 미식로그입니다. 들기름의 깊은 풍미를 담아낸 들기름모밀과 바삭한 돈까스, 우동을 함께 즐기는 돈까스우동세트는 드셔보신 분들이 먼저 인정해 주시는 저희 집 인기 메뉴인데요! 찾아주시는 성원에 보답하고자 방문자 리뷰 이벤트(음료수 1개 서비스)도 함께 진행하고 있으니, 맛있는 식사도 하시고 시원한 음료 서비스도 받아 가세요! 기분 좋은 한 끼가 될 수 있도록 늘 정성을 다해 모시겠습니다. 편하게 들러주세요! 😊
-                    """
+[필수 작성 규칙]
+1. [제목]과 [본문] 형태로 출력하세요.
+2. [본문 구조]: 반드시 아래 4개의 문단으로 나누고, 문단 사이에는 엔터 두 번(\\n\\n)을 넣어 문단을 명확히 분리하세요!
+
+   - 1문단: {reg} 맛집 '{store}'입니다. (첫 인사 한 줄)
+   - 2문단: 주력 메뉴({men})의 맛, 고소함, 바삭함, 식감, 메뉴 간의 궁합을 맛깔스럽게 자랑하는 문장
+   - 3문단: {'이벤트 정보가 있으므로, ' + event + ' 진행 소식을 감사한 마음과 함께 정성껏 안내' if has_event else '이벤트가 없으므로 3문단은 아예 작성하지 말고 생략할 것'}
+   - 4문단: 기분 좋은 한 끼가 될 수 있도록 정성을 다해 모시겠다는 진심 어린 마무리 인사
+
+3. 절대 금지 사항:
+   - "특별한 이벤트는 없지만" 같은 어색하고 모순된 표현 절대 금지!
+   - 본문 내 텍스트에 별표(**) 마크다운 기호 절대 금지!
+   - 글 끝에 해시태그(#)나 추천 키워드 목록 나열 절대 금지!
+
+[출력 양식 모범 예시 - 아래 양식의 줄바꿈 방식을 100% 동일하게 따라 하세요]
+[제목] 오늘 점심은 식사동 미식로그에서 고소한 들기름모밀 어떠세요? 😋✨
+[본문] 고양시 일산동구 식사동 맛집 미식로그입니다.
+
+들기름의 깊은 풍미를 담아낸 들기름모밀과 바삭한 돈까스, 우동을 함께 즐기는 돈까스우동세트는 드셔보신 분들이 먼저 인정해 주시는 저희 집 인기 메뉴인데요!
+
+찾아주시는 성원에 보답하고자 방문자 리뷰 이벤트(음료수 1개 서비스)도 함께 진행하고 있으니, 맛있는 식사도 하시고 시원한 음료 서비스도 받아 가세요!
+
+기분 좋은 한 끼가 될 수 있도록 늘 정성을 다해 모시겠습니다. 편하게 들러주세요! 😊
+"""
                     
-                    intro_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role, temp=0.4)
+                    intro_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role, temp=0.3)
                     
-                    title_part = ""
-                    body_part = intro_res
+                    # HTML 출력 시 줄바꿈(\\n\\n)이 제대로 <br><br>로 들어가도록 처리
                     if "[제목]" in intro_res and "[본문]" in intro_res:
                         parts = intro_res.split("[본문]")
                         title_part = parts[0].replace("[제목]", "").strip()
                         body_part = parts[1].strip()
-                        intro_html = f"<h4 style='color: #007bff; margin-top: 0; margin-bottom: 15px;'>{title_part}</h4><div style='border-top: 1px dashed #dee2e6; margin-bottom: 15px;'></div>{body_part.replace('\n', '<br>')}"
+                        
+                        # 엔터 두 번은 두 줄 바꿈으로, 엔터 한 번은 한 줄 바꿈으로 완벽 전환
+                        body_html = body_part.replace('\n\n', '<br><br>').replace('\n', '<br>')
+                        intro_html = f"<h4 style='color: #007bff; margin-top: 0; margin-bottom: 20px; font-size: 18px;'>{title_part}</h4><div style='border-top: 1px dashed #dee2e6; margin-bottom: 20px;'></div><div style='line-height: 1.8; font-size: 15px;'>{body_html}</div>"
                     else:
-                        intro_html = intro_res.replace('\n', '<br>')
+                        intro_html = intro_res.replace('\n\n', '<br><br>').replace('\n', '<br>')
 
                     display_event = event if event else "없음"
                     
@@ -327,7 +318,7 @@ with tab1:
                             ul {{ list-style: none; padding: 0; margin: 0; }}
                             
                             .intro-section h3 {{ font-size: 22px; color: #212529; margin-bottom: 15px; font-weight: 800; }}
-                            .intro-box {{ background-color: #f8f9fa; padding: 25px; border-radius: 8px; border: 1px solid #dee2e6; font-size: 16px; line-height: 1.7; color: #212529; }}
+                            .intro-box {{ background-color: #f8f9fa; padding: 25px; border-radius: 8px; border: 1px solid #dee2e6; color: #212529; }}
                             
                             .btn-down {{ margin-top: 25px; padding: 16px; background-color: #343a40; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 18px; font-weight: bold; width: 100%; max-width: 800px; text-align: center; transition: 0.2s; }}
                             .btn-down:hover {{ background-color: #212529; }}
@@ -382,7 +373,7 @@ with tab1:
                     
                     components.html(html_content, height=1000, scrolling=True)
                     
-                    st.caption("텍스트 복사용 원본 (제목과 본문이 나뉘어 있습니다)")
+                    st.caption("텍스트 복사용 원본")
                     st.code(intro_res)
                     
                 else: 
