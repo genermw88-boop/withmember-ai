@@ -178,7 +178,7 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         return [], [], f"시스템 에러: {str(e)}"
 
 # --- 3. OpenAI 카피라이팅 함수 ---
-def generate_ai_content(prompt, api_key, system_role="", temp=0.4):
+def generate_ai_content(prompt, api_key, system_role="", temp=0.5):
     try:
         client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
@@ -187,7 +187,7 @@ def generate_ai_content(prompt, api_key, system_role="", temp=0.4):
                 {"role": "system", "content": system_role},
                 {"role": "user", "content": prompt}
             ],
-            temperature=temp 
+            temperature=temp # 길고 다채로운 표현을 위해 temp 소폭 상승
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
@@ -224,19 +224,18 @@ with tab1:
         if not store or not reg or not men:
             st.error("매장명, 지역, 메뉴는 필수 입력입니다!")
         else:
-            with st.spinner("네이버 상권 데이터 수집 및 소개글을 생성 중입니다... (약 10초 소요)"):
+            with st.spinner("네이버 상권 데이터 수집 및 소개글을 길고 풍성하게 생성 중입니다... (약 15초 소요)"):
                 g_kws, d_kws, msg = get_naver_real_keywords(store, reg, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
                 if msg == "success":
                     all_real_kws = [k['relKeyword'] for k in g_kws + d_kws]
                     has_event = bool(event and event.strip())
                     
-                    # 💡 [핵심 개선] 사장님 1인칭 및 가식 없는 자연스러운 어조 강제
                     system_role = f"""당신은 '{store}' 매장을 운영하는 사장님입니다.
 3자 마케터처럼 딱딱하거나 AI 티 나는 어색한 문장을 쓰지 말고, 진짜 사장님이 손님에게 다정하게 이야기하듯 1인칭 시점('저희 집', '모시겠습니다')으로 작성하세요.
 절대로 문단을 통째로 뭉쳐 쓰지 말고, 문단과 문단 사이에 엔터 두 번(\\n\\n)을 넣어 확연히 구분해 작성하세요."""
 
-                    # 💡 [핵심 개선] 문단 구분 및 예시 레이아웃 강제 반영
+                    # 💡 [핵심 개선] 글자 수 확장 및 각 문단별 세부 지시 추가
                     prompt = f"""
 [매장 정보]
 - 매장명: '{store}'
@@ -249,38 +248,36 @@ with tab1:
 
 [필수 작성 규칙]
 1. [제목]과 [본문] 형태로 출력하세요.
-2. [본문 구조]: 반드시 아래 4개의 문단으로 나누고, 문단 사이에는 엔터 두 번(\\n\\n)을 넣어 문단을 명확히 분리하세요!
+2. [본문 분량 및 구조]: 전체 공백 포함 500자 이상이 되도록 기존보다 훨씬 더 길고 풍성하게 작성하세요! 반드시 아래 4개의 문단으로 나누고, 문단 사이에는 엔터 두 번(\\n\\n)을 넣어 문단을 명확히 분리하세요.
 
-   - 1문단: {reg} 맛집 '{store}'입니다. (첫 인사 한 줄)
-   - 2문단: 주력 메뉴({men})의 맛, 고소함, 바삭함, 식감, 메뉴 간의 궁합을 맛깔스럽게 자랑하는 문장
-   - 3문단: {'이벤트 정보가 있으므로, ' + event + ' 진행 소식을 감사한 마음과 함께 정성껏 안내' if has_event else '이벤트가 없으므로 3문단은 아예 작성하지 말고 생략할 것'}
-   - 4문단: 기분 좋은 한 끼가 될 수 있도록 정성을 다해 모시겠다는 진심 어린 마무리 인사
+   - 1문단: {reg} 맛집 '{store}'입니다. (첫 인사와 함께 매장을 찾아주시는 고객님들께 다정한 안부 인사 등 1~2문장으로 시작)
+   - 2문단: 주력 메뉴({men})에 대한 상세한 어필. 맛, 고소함, 바삭함, 식감, 재료의 신선함, 메뉴 간의 찰떡 궁합 등을 고객이 상상하며 침이 고이도록 아주 구체적이고 길게 묘사하세요 (반드시 3~4문장 이상으로 살을 붙여서 길게 작성할 것)
+   - 3문단: {'이벤트 정보가 있으므로, ' + event + ' 진행 소식을 안내하세요. 단순히 사실만 적지 말고, 고객에 대한 감사한 마음이나 넉넉한 인심을 덧붙여 2~3문장 이상으로 정성스럽게 작성할 것' if has_event else '이벤트가 없으므로 3문단은 아예 작성하지 말고 생략할 것'}
+   - 4문단: 기분 좋은 한 끼가 될 수 있도록 늘 초심을 잃지 않고 정성을 다해 모시겠다는 진심 어린 마무리 인사와 방문 독려 (2문장 이상으로 길게)
 
 3. 절대 금지 사항:
    - "특별한 이벤트는 없지만" 같은 어색하고 모순된 표현 절대 금지!
    - 본문 내 텍스트에 별표(**) 마크다운 기호 절대 금지!
    - 글 끝에 해시태그(#)나 추천 키워드 목록 나열 절대 금지!
 
-[출력 양식 모범 예시 - 아래 양식의 줄바꿈 방식을 100% 동일하게 따라 하세요]
+[출력 양식 모범 예시 - 아래 양식의 줄바꿈 방식을 100% 동일하게 따라 하되, 내용은 훨씬 더 길게 쓸 것]
 [제목] 오늘 점심은 식사동 미식로그에서 고소한 들기름모밀 어떠세요? 😋✨
-[본문] 고양시 일산동구 식사동 맛집 미식로그입니다.
+[본문] 고양시 일산동구 식사동 맛집 미식로그입니다. 언제나 잊지 않고 저희 매장을 찾아주시는 모든 분들께 진심으로 감사의 인사를 드립니다.
 
-들기름의 깊은 풍미를 담아낸 들기름모밀과 바삭한 돈까스, 우동을 함께 즐기는 돈까스우동세트는 드셔보신 분들이 먼저 인정해 주시는 저희 집 인기 메뉴인데요!
+들기름의 깊은 풍미를 담아낸 들기름모밀과 바삭한 돈까스, 우동을 함께 즐기는 돈까스우동세트는 드셔보신 분들이 먼저 인정해 주시는 저희 집 인기 메뉴인데요! (여기에 재료의 맛과 식감, 정성에 대한 구체적인 문장을 2~3줄 더 덧붙여서 아주 길고 맛있게 묘사할 것)
 
-찾아주시는 성원에 보답하고자 방문자 리뷰 이벤트(음료수 1개 서비스)도 함께 진행하고 있으니, 맛있는 식사도 하시고 시원한 음료 서비스도 받아 가세요!
+찾아주시는 성원에 보답하고자 방문자 리뷰 이벤트(음료수 1개 서비스)도 함께 진행하고 있습니다! (여기에 고객에 대한 감사함과 혜택에 대한 설명을 한두 줄 더 덧붙여 길게 작성할 것)
 
-기분 좋은 한 끼가 될 수 있도록 늘 정성을 다해 모시겠습니다. 편하게 들러주세요! 😊
+기분 좋은 한 끼가 될 수 있도록 늘 초심을 잃지 않고 정성을 다해 모시겠습니다. 사랑하는 가족, 연인, 친구들과 함께 언제든지 편하게 들러주세요! 😊
 """
                     
-                    intro_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role, temp=0.3)
+                    intro_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role, temp=0.5)
                     
-                    # HTML 출력 시 줄바꿈(\\n\\n)이 제대로 <br><br>로 들어가도록 처리
                     if "[제목]" in intro_res and "[본문]" in intro_res:
                         parts = intro_res.split("[본문]")
                         title_part = parts[0].replace("[제목]", "").strip()
                         body_part = parts[1].strip()
                         
-                        # 엔터 두 번은 두 줄 바꿈으로, 엔터 한 번은 한 줄 바꿈으로 완벽 전환
                         body_html = body_part.replace('\n\n', '<br><br>').replace('\n', '<br>')
                         intro_html = f"<h4 style='color: #007bff; margin-top: 0; margin-bottom: 20px; font-size: 18px;'>{title_part}</h4><div style='border-top: 1px dashed #dee2e6; margin-bottom: 20px;'></div><div style='line-height: 1.8; font-size: 15px;'>{body_html}</div>"
                     else:
