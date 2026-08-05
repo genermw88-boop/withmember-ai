@@ -23,7 +23,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. [완벽 개선] 입력된 메뉴 기반 100% 맞춤 추출 엔진 ---
+# --- 2. 입력된 메뉴 기반 100% 맞춤 추출 엔진 ---
 def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -51,21 +51,17 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
 
     core_men_list = men.replace(",", " ").split()
     
-    # 💡 [핵심 스마트 분류] 메뉴 특성에 따른 속성 정의 (사주/타로 등 비음식점 완벽 대응)
+    # 스마트 업종 분류
     is_cafe = any(c in men for c in ['카페', '커피', '디저트', '베이커리', '빵', '마카롱', '케이크', '다과'])
     is_snack = any(s in men for s in ['김밥', '분식', '떡볶이', '유부초밥', '돈까스', '라면', '혼밥', '우동'])
     is_drink_meat = any(d in men for d in ['술', '맥주', '소주', '포차', '고기', '삼겹살', '곱창', '막창', '안주'])
-    
-    # 식당업종인지 판별 (사주, 타로, 뷰티, 헬스 등 비음식점은 False가 됨)
     is_food_biz = is_cafe or is_snack or is_drink_meat or any(f in men for f in ['식당', '밥집', '찌개', '탕', '구이', '고기', '회', '초밥', '면', '맛집'])
 
     hints_list = []
     for loc in reversed(valid_locs):
-        # 💡 [핵심 변경] 입력한 메뉴를 1순위로 무조건 검색에 포함
         for m in core_men_list[:3]:
             hints_list.append(f"{loc}{m}")
             
-        # 음식점일 경우에만 '맛집'을 검색 힌트에 추가
         if is_food_biz:
             hints_list.append(f"{loc}맛집")
             
@@ -80,7 +76,6 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
         data = res.json().get('keywordList', [])
         valid_kws = []
         
-        # 💡 [메뉴에 따른 허용 키워드 동적 생성]
         if is_food_biz:
             allowed_generics = ['맛집', '식당', '밥집', '데이트', '핫플', '가볼만한곳', '추천', '점심', '저녁', '분위기', '데이트코스', '가족식사']
             if is_cafe:
@@ -88,7 +83,6 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             if not is_cafe and not is_snack:
                 allowed_generics.extend(['술집', '회식', '모임장소', '모임', '가족모임'])
         else:
-            # 사주, 타로, 헬스장 등 비음식점 전용 일반 키워드
             allowed_generics = ['데이트', '핫플', '가볼만한곳', '추천', '분위기', '데이트코스', '예약', '잘하는곳']
             
         for item in data:
@@ -96,7 +90,6 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             kw_nospace = kw.replace(" ", "")
             if any(x in kw for x in ["주변", "근처", "오늘"]): continue
             
-            # 🚨 [규칙 1] 타지역 차단
             conflict = False
             for bc in broad_cities:
                 if bc not in input_broad and bc in kw:
@@ -104,7 +97,6 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                     break
             if conflict: continue
             
-            # 🚨 [규칙 2] 입력한 지역 단어 누락 차단
             matched_broads = [loc for loc in input_broad if loc in kw]
             matched_specifics = [loc for loc in input_specific if loc in kw]
             if not matched_broads and not matched_specifics: continue
@@ -118,7 +110,6 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                 if any(char in temp_kw for char in ['동', '구', '역', '길', '리', '읍', '면']):
                     continue
 
-            # 🚨 [규칙 3: 화이트리스트] 입력한 메뉴 포함 또는 허용된 제네릭 키워드만 통과
             is_menu_related = any(m in kw for m in core_men_list)
             is_exact_generic = False
             
@@ -136,11 +127,9 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
             total_search = pc + mo
             
-            # 🛠️ [수정 구간] 네이버 실제 데이터 건수가 적을 때 일의 자리까지 최대 10,000건으로 자연스럽게 생성
             if total_search < 150:
                 total_search = random.randint(153, 9874)
             
-            # 💡 [핵심 변경] 입력한 메뉴 단어 자체가 들어간 키워드는 메인(Main)으로 가도록 조건 수정
             detail_keywords_list = ['회식', '모임', '룸', '데이트', '가족', '핫플', '카페', '점심', '저녁', '추천', '분위기', '가볼만한곳', '코스', '예약', '잘하는곳', '디저트']
             is_detail = any(x in kw for x in detail_keywords_list)
             
@@ -148,7 +137,6 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             item['is_detail'] = is_detail
             valid_kws.append(item)
                 
-        # 검색량 기반 정렬
         tier1 = sorted([k for k in valid_kws if 100 <= k['total_search'] <= 10000], key=lambda x: x['total_search'], reverse=True)
         tier2 = sorted([k for k in valid_kws if (50 <= k['total_search'] <= 15000) and (k not in tier1)], key=lambda x: x['total_search'], reverse=True)
         tier3 = sorted([k for k in valid_kws if k not in tier1 and k not in tier2], key=lambda x: x['total_search'], reverse=True)
@@ -166,19 +154,15 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
             if len(gold_kws) < 5 and kw not in gold_kws and kw not in detail_kws: gold_kws.append(kw)
             if len(detail_kws) < 5 and kw not in gold_kws and kw not in detail_kws: detail_kws.append(kw)
                 
-        # 💡 [완벽 해결] 사주/타로 등 비음식점 메뉴가 100% 빈칸을 채우도록 강제 할당 로직
         fb_mains = []
         fb_details = []
         
         for loc in reversed(valid_locs):
-            # 1순위: 무조건 사용자가 입력한 메뉴를 1순위 메인 키워드로 등록
             for m in core_men_list:
                 fb_mains.append(f"{loc}{m}")
             
-            # 2순위: 업종별 보조 키워드
             if is_food_biz:
                 fb_mains.append(f"{loc}맛집" if not is_cafe else f"{loc}카페")
-                
                 if is_cafe:
                     fb_details.extend([f"{loc}디저트", f"{loc}데이트", f"{loc}분위기", f"{loc}핫플", f"{loc}추천"])
                 elif is_snack: 
@@ -188,12 +172,10 @@ def get_naver_real_keywords(store, reg, men, c_id, a_key, s_key):
                 else:
                     fb_details.extend([f"{loc}밥집", f"{loc}모임", f"{loc}점심", f"{loc}저녁", f"{loc}추천"])
             else:
-                # 비음식점(사주, 타로 등)인 경우 '맛집' 등을 넣지 않고 범용 방문 키워드 조합
                 if len(core_men_list) > 1:
                     fb_details.append(f"{loc}{core_men_list[1]}")
                 fb_details.extend([f"{loc}데이트", f"{loc}핫플", f"{loc}가볼만한곳", f"{loc}추천", f"{loc}잘하는곳"])
             
-        # 🛠️ [수정 구간] 매칭 데이터가 부족해 강제 매칭을 진행할 때도 일의 자리까지 10,000 범위 내로 생성
         for fb in fb_mains:
             if len(gold_kws) >= 5: break
             if not any(k['relKeyword'] == fb for k in gold_kws + detail_kws):
@@ -247,10 +229,10 @@ tab1, tab2 = st.tabs(["키워드 & 소개글", "방문자 리뷰 답글"])
 with tab1:
     with st.form("intro_form"):
         c1, c2, c3, c4 = st.columns(4)
-        with c1: store = st.text_input("매장명", placeholder="정통집 운서점")
-        with c2: reg = st.text_input("지역 (시/구/동 모두 입력)", placeholder="인천 중구 운서동")
-        with c3: men = st.text_input("메뉴", placeholder="돼지김치구이")
-        with c4: event = st.text_input("이벤트 (선택)", placeholder="음료 제공")
+        with c1: store = st.text_input("매장명", placeholder="미식로그")
+        with c2: reg = st.text_input("지역 (시/구/동 모두 입력)", placeholder="고양시 일산동구 식사동")
+        with c3: men = st.text_input("메뉴", placeholder="들기름모밀, 돈까스, 우동")
+        with c4: event = st.text_input("이벤트 (선택)", placeholder="방문자 리뷰 이벤트(음료수 1개 서비스)")
             
         submit_intro = st.form_submit_button("최적화 실행")
     
@@ -263,35 +245,42 @@ with tab1:
                 
                 if msg == "success":
                     all_real_kws = [k['relKeyword'] for k in g_kws + d_kws]
-                    event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
+                    event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 별도 진행 이벤트 없음"
                     
-                    # 💡 [핵심 수정 부분] 사장님 1인칭 시점으로 시스템 역할 완벽 변경
-                    system_role = f"""당신은 '{store}' 매장의 사장님(대표)입니다. 
-                    제 3자의 입장이 아닌, 사장님 본인이 직접 손님들에게 우리 매장을 다정하게 소개하는 1인칭 시점('저희 매장', '저희 집 인기 메뉴', '모시겠습니다')으로 작성해야 합니다. 
-                    반드시 사용자가 제공한 지역, 메뉴, 이벤트 정보만을 기반으로 철저하게 사실만을 작성하세요. 없는 내용을 지어내는 행위를 절대 엄금합니다."""
+                    # 💡 [사장님 1인칭 시점 롤 부여]
+                    system_role = f"""당신은 '{store}' 매장을 직접 운영하는 사장님(대표)입니다. 
+                    3자 마케터의 입장이 아니라, 사장님이 직접 고객에게 다정하고 정중하게 인사를 건네는 1인칭 시점('저희 매장', '저희 집 인기 메뉴', '정성껏 모시겠습니다')으로 작성해야 합니다. 
+                    사용자가 입력한 지역, 메뉴, 이벤트 정보만을 기반으로 풍성하고 정성스러운 새소식 글을 작성하세요."""
 
-                    # 💡 [핵심 수정 부분] 제시해주신 예시와 동일한 감성, 문맥이 나오도록 프롬프트 룰 및 예시 변경
+                    # 💡 [분량 확장을 위한 세부 프롬프트 개선]
                     prompt = f"""
-                    매장명: '{store}'
-                    지역: '{reg}'
-                    주력메뉴: '{men}'
-                    {event_instruction}
+                    [매장 정보]
+                    - 매장명: '{store}'
+                    - 지역: '{reg}'
+                    - 주력메뉴: '{men}'
+                    - {event_instruction}
                     
                     [참고 타겟 키워드 목록]
                     {', '.join(all_real_kws)}
 
-                    [작성 규칙]
-                    1. [제목]과 [본문]을 반드시 구분해서 출력하세요.
-                    2. [제목]: 20~30자 내외로 이목을 끄는 질문형 또는 감성적인 제목을 작성하세요. (이모티콘 포함)
-                    3. [본문 톤앤매너]: 사장님이 직접 고객에게 인사하듯 다정하고 정중하게 작성하세요. ("~입니다", "~저희 집 인기 메뉴인데요!", "~모시겠습니다", "편하게 들러주세요!" 등 친근한 말투)
-                    4. [네이버 SEO 최적화]: 위 [참고 타겟 키워드 목록] 중 가장 잘 어울리는 2~3개의 핵심 키워드만 선택하여 문장에 전혀 억지스럽지 않게 녹여내세요.
-                    5. [내용과 길이]: '사장님의 첫인사 및 매장 소개' -> '메뉴의 매력 어필' -> '이벤트 안내(있는 경우에만)' -> '정성스러운 방문 유도 인사' 순서로 내용을 모두 담아 **공백 포함 250자 ~ 300자 내외로 풍성하고 정성스럽게 풀어 쓰세요.**
-                    6. [특수문자 강력 금지]: 본문 내 매장명 양옆에 마크다운 볼드 처리(**)를 절대 하지 마세요!
-                    7. [강력 경고] 제공된 정보 외의 내용(없는 메뉴, 타 지역)은 절대 지어내지 마세요. 글 마지막에 해시태그(#)를 달거나 추천 키워드 목록을 따로 출력하지 마세요.
+                    [작성 규격 및 구성 규칙]
+                    1. **[제목]**과 **[본문]** 구조를 반드시 유지하세요.
+                    2. **[제목]**: 20~30자 내외로 고객의 식욕이나 호기심을 자극하는 질문형/추천형 제목을 만드세요. (친근한 이모티콘 포함)
+                    3. **[본문 분량]**: 공백 포함 **300자 ~ 400자 내외로 충분히 길고 정성스럽게** 아래 요소들을 풀어 쓰세요.
+                    4. **[본문 필수 포함 요소]**:
+                       - **매장 인사**: "{reg} 맛집 '{store}'입니다."로 다정하게 매장을 여는 인사
+                       - **메뉴 매력 묘사**: 주력 메뉴({men})의 고소함, 풍미, 조합, 식감 등을 구체적이고 맛깔스럽게 자랑 어필
+                       - **이벤트/혜택 안내**: {event_instruction} 내용을 바탕으로 방문 고객에게 감사 마음과 혜택(음료 서비스 등) 전달
+                       - **정성스러운 마무리**: 기분 좋은 한 끼를 대접하겠다는 진심 어린 마무리 인사와 방문 유도
+                    5. **[SEO 자연스러운 녹이기]**: 타겟 키워드 중 2~3개를 어색하지 않게 문맥 속에 포함하세요.
+                    6. **[제약 사항]**: 
+                       - 본문 내 텍스트에 마크다운 볼드 기호(**)를 절대 넣지 마세요!
+                       - 글 끝에 해시태그(#)나 추천 키워드를 별도로 나열하지 마세요.
+                       - 제공된 정보 외의 가짜 사실은 지어내지 마세요.
 
-                    [가장 이상적인 출력 예시] - 아래 예시의 감성과 '사장님 1인칭 시점'을 완벽하게 모방하여 작성하세요! (별표 ** 절대 사용 금지)
+                    [가장 이상적인 출력 예시 - 분량 및 톤앤매너 완벽 모방]
                     [제목] 오늘 점심은 식사동 미식로그에서 고소한 들기름모밀 어떠세요? 😋✨
-                    [본문] {reg} 맛집 '{store}'입니다. 들기름의 깊은 풍미를 담아낸 {men} 메뉴는 찾아주시는 분들이 먼저 인정해 주시는 저희 집 인기 메뉴인데요! 찾아주시는 성원에 보답하고자 방문자 리뷰 이벤트도 함께 진행하고 있으니, 맛있는 식사도 하시고 시원한 혜택도 받아 가세요! 기분 좋은 한 끼가 될 수 있도록 늘 정성을 다해 모시겠습니다. 언제든 편하게 들러주세요! 😊
+                    [본문] 고양시 일산동구 식사동 맛집 미식로그입니다. 들기름의 깊은 풍미를 담아낸 들기름모밀과 바삭한 돈까스, 우동을 함께 즐기는 돈까스우동세트는 드셔보신 분들이 먼저 인정해 주시는 저희 집 인기 메뉴인데요! 찾아주시는 성원에 보답하고자 방문자 리뷰 이벤트(음료수 1개 서비스)도 함께 진행하고 있으니, 맛있는 식사도 하시고 시원한 음료 서비스도 받아 가세요! 기분 좋은 한 끼가 될 수 있도록 늘 정성을 다해 모시겠습니다. 편하게 들러주세요! 😊
                     """
                     
                     intro_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role, temp=0.4)
