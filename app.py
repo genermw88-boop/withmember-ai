@@ -265,45 +265,41 @@ with tab1:
                     all_real_kws = [k['relKeyword'] for k in g_kws + d_kws]
                     event_instruction = f"진행 중인 이벤트: '{event}'" if event else "현재 특별히 강조할 이벤트는 없음"
                     
-                    system_role = f"""당신은 '{store}' 매장 전담 마케터입니다. 
-                    반드시 사용자가 제공한 지역, 메뉴, 이벤트 정보만을 기반으로 철저하게 사실만을 작성해야 합니다. 
-                    사용자가 언급하지 않은 상황이나 타겟 고객층을 임의로 지어내는 환각(Hallucination) 행위를 절대 엄금합니다."""
+                    system_role = f"당신은 '{store}' 매장 사장님 본인입니다. 네이버 플레이스 '새소식'에 직접 올릴 안내글을 작성합니다. 마케팅 대행사나 제3자의 시선이 아니라, 사장님이 손님들에게 직접 말을 건네듯 친근하고 진정성 있는 1인칭 어조로 작성하세요. 제공된 지역({reg}), 주력메뉴({men}), 이벤트({event_instruction}) 정보만을 철저히 기반으로 사실만을 작성하세요."
 
-                    # 💡 프롬프트 수정: 길이 확장, 볼드체 금지, 예시와 동일한 감성 반영
                     prompt = f"""
-                    매장명: '{store}'
-                    지역: '{reg}'
-                    주력메뉴: '{men}'
-                    {event_instruction}
-                    
-                    [참고 타겟 키워드 목록]
-                    {', '.join(all_real_kws)}
+매장명: '{store}'
+지역: '{reg}'
+주력메뉴: '{men}'
+{event_instruction}
 
-                    [작성 규칙]
-                    1. [제목]과 [본문]을 반드시 구분해서 출력하세요.
-                    2. [제목]: 20~30자 내외로 이목을 끄는 질문형 또는 감성적인 제목을 작성하세요. (이모티콘 포함)
-                    3. [본문 톤앤매너]: 동네 주민에게 맛집을 소개하듯 친근하고 부드러운 블로그/SNS 스타일로 작성하세요. ("~했어요", "~제격이에요", "~즐겨보세요!" 등 자연스럽고 따뜻한 말투)
-                    4. [네이버 SEO 최적화]: 위 [참고 타겟 키워드 목록] 중 가장 잘 어울리는 2~3개의 핵심 키워드만 선택하여 문장에 전혀 억지스럽지 않게 녹여내세요.
-                    5. [내용과 길이]: 너무 짧게 2~3문장으로 끝내지 마세요! 반드시 '인사말/소개', '메뉴의 매력 어필/상황 제시(예: 점심, 저녁, 모임 등)', '방문 유도'의 내용을 모두 담아 **공백 포함 250자 ~ 300자 내외로 풍성하고 정성스럽게 풀어 쓰세요.**
-                    6. [특수문자 강력 금지]: 본문 내 매장명 양옆에 마크다운 볼드 처리(**)를 절대 하지 마세요! 오직 작은따옴표만 사용하세요. (예: '{store}')
-                    7. [강력 경고] 제공된 정보 외의 내용(없는 메뉴, 타 지역)은 절대 지어내지 마세요. 글 마지막에 해시태그(#)를 달거나 추천 키워드 목록을 따로 출력하지 마세요.
+[참고 타겟 키워드 목록]
+{', '.join(all_real_kws)}
 
-                    [가장 이상적인 출력 예시] - 아래 예시의 감성과 풍성한 길이를 완벽하게 모방하여 작성하세요! (별표 ** 절대 사용 금지)
-                    [제목] 명장동에서 제대로 된 진한 갈비 맛을 찾고 계신다면? 🍖✨
-                    [본문] 부산 동래구 명장동에서 깊은 국물의 갈비탕과 매콤달콤 부드러운 갈비찜으로 유명한 '{store}'을(를) 소개합니다! 이미 동네 주민들 사이에서는 소문난 맛집인데요. 고기가 워낙 부드럽고 국물이 진해서 든든한 점심 식사는 물론, 가족 외식이나 모임 장소로도 제격이에요. 오늘 저녁, 정갈하고 맛있는 밥 한 끼가 생각나신다면 명장동 추천 맛집 '{store}'에서 특별한 식사를 즐겨보세요! 🍲🥢
-                    """
+[작성 규칙 및 포맷]
+1. 반드시 아래 예시와 정확히 동일한 단락 구조(인사말/메뉴소개/이벤트 및 마무리)와 톤앤매너를 유지하세요.
+2. [제목]과 [본문]을 구분해서 출력하지 말고, 곧바로 본문 텍스트 형태로 출력하세요. (첫 줄은 감성적인 인사/제안 문장)
+3. 톤앤매너: 손님에게 다정하게 말을 건네는 사장님 말투 ("~어떠세요? 😋✨", "~소개합니다!", "~제격이에요!", "~받아 가세요!", "~들러주세요! 😊")
+4. 네이버 SEO 최적화: 위 [참고 타겟 키워드 목록] 중 가장 잘 어울리는 핵심 키워드 1~2개를 문장에 자연스럽게 녹여내세요.
+5. 이벤트 안내 문구: 이벤트가 있는 경우(예: 음료수 제공 등) "찾아주시는 성원에 보답하고자 방문자 리뷰 이벤트(이벤트 내용)도 함께 진행하고 있으니..." 형식으로 자연스럽게 포함하세요. 이벤트가 없으면 이벤트 관련 문구는 생략하세요.
+6. 특수문자 강력 금지: 매장명 양옆에 마크다운 볼드 처리(**)를 절대 하지 마세요! 오직 작은따옴표만 사용하세요. (예: '{store}') 단, 이벤트 안내 문구 내의 서비스 품목(예: **방문자 리뷰 이벤트(음료수 1개 서비스)**) 같은 강조는 허용하되, 매장명에는 절대 볼드를 쓰지 마세요.
+7. [강력 경고] 제공된 정보 외의 내용(없는 메뉴, 타 지역)은 절대 지어내지 마세요. 글 마지막에 해시태그(#)를 달거나 추천 키워드 목록을 따로 출력하지 마세요.
+
+[가장 이상적인 출력 예시] - 아래 예시의 감성, 문단 간격, 줄바꿈 형식을 완벽하게 모방하여 작성하세요!
+오늘 점심은 식사동 미식로그에서 고소한 들기름모밀 어떠세요? 😋✨
+
+고양시 일산동구 식사동 맛집 미식로그입니다.
+
+들기름의 깊은 풍미를 담아낸 들기름모밀과 바삭한 돈까스, 우동을 함께 즐기는 돈까스우동세트는 드셔보신 분들이 먼저 인정해 주시는 저희 집 인기 메뉴인데요!
+
+찾아주시는 성원에 보답하고자 **방문자 리뷰 이벤트(음료수 1개 서비스)**도 함께 진행하고 있으니, 맛있는 식사도 하시고 시원한 음료 서비스도 받아 가세요!
+
+기분 좋은 한 끼가 될 수 있도록 늘 정성을 다해 모시겠습니다. 편하게 들러주세요! 😊
+"""
                     
                     intro_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role, temp=0.4)
-                    
-                    title_part = ""
                     body_part = intro_res
-                    if "[제목]" in intro_res and "[본문]" in intro_res:
-                        parts = intro_res.split("[본문]")
-                        title_part = parts[0].replace("[제목]", "").strip()
-                        body_part = parts[1].strip()
-                        intro_html = f"<h4 style='color: #007bff; margin-top: 0; margin-bottom: 15px;'>{title_part}</h4><div style='border-top: 1px dashed #dee2e6; margin-bottom: 15px;'></div>{body_part.replace('\n', '<br>')}"
-                    else:
-                        intro_html = intro_res.replace('\n', '<br>')
+                    intro_html = body_part.replace('\n', '<br>')
 
                     display_event = event if event else "없음"
                     
@@ -337,7 +333,7 @@ with tab1:
                             ul {{ list-style: none; padding: 0; margin: 0; }}
                             
                             .intro-section h3 {{ font-size: 22px; color: #212529; margin-bottom: 15px; font-weight: 800; }}
-                            .intro-box {{ background-color: #f8f9fa; padding: 25px; border-radius: 8px; border: 1px solid #dee2e6; font-size: 16px; line-height: 1.7; color: #212529; }}
+                            .intro-box {{ background-color: #f8f9fa; padding: 25px; border-radius: 8px; border: 1px solid #dee2e6; font-size: 16px; line-height: 1.7; color: #212529; white-space: pre-wrap; }}
                             
                             .btn-down {{ margin-top: 25px; padding: 16px; background-color: #343a40; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 18px; font-weight: bold; width: 100%; max-width: 800px; text-align: center; transition: 0.2s; }}
                             .btn-down:hover {{ background-color: #212529; }}
@@ -369,14 +365,14 @@ with tab1:
                             
                             <div class="intro-section">
                                 <h3>최적화 소개글 (새소식)</h3>
-                                <div class="intro-box">{intro_html}</div>
+                                <div class="intro-box">{body_part}</div>
                             </div>
                         </div>
                         
                         <button class="btn-down" onclick="downloadImage()">리포트 화면 이미지로 다운로드</button>
 
                         <script>
-                            function downloadImage() {{
+                            function downloadImage() {
                                 const element = document.getElementById('capture-area');
                                 html2canvas(element, {{ scale: 2, backgroundColor: "#ffffff" }}).then(canvas => {{
                                     let link = document.createElement('a');
@@ -384,7 +380,7 @@ with tab1:
                                     link.href = canvas.toDataURL('image/png');
                                     link.click();
                                 }});
-                            }}
+                            }
                         </script>
                     </body>
                     </html>
@@ -392,7 +388,7 @@ with tab1:
                     
                     components.html(html_content, height=1000, scrolling=True)
                     
-                    st.caption("텍스트 복사용 원본 (제목과 본문이 나뉘어 있습니다)")
+                    st.caption("텍스트 복사용 원본 (새소식 안내글)")
                     st.code(intro_res)
                     
                 else: 
