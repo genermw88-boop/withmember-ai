@@ -31,7 +31,7 @@ def parse_qc_cnt(val):
             return 10  # 네이버 API의 '< 10' 처리
     return int(val) if val else 0
 
-# --- 2. 네이버 키워드 추출 ENGINE (실제 데이터 기반) ---
+# --- 2. 네이버 지역 기반 키워드 추출 ENGINE ---
 def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -45,24 +45,36 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
         'X-Signature': signature
     }
     
-    reg_parts = reg.strip().split()
-    last_loc = reg_parts[-1] if reg_parts else reg
+    # 지역명 파싱 (예: "경남", "창원시", "마산합포구", "해운동")
+    reg_parts = [p.strip() for p in reg.strip().split()]
+    loc_dong = reg_parts[-1] if reg_parts else reg
+    loc_city = reg_parts[-2] if len(reg_parts) > 1 else loc_dong
+    
+    # 필터링을 위한 핵심 지역 키워드 추출 (시, 구, 동 단위 제거)
+    valid_locs = [p.replace("시","").replace("군","").replace("구","").replace("동","").replace("읍","").replace("면","") for p in reg_parts]
+    valid_locs = [v for v in valid_locs if len(v) >= 1]
+    
     core_men = men.split(",")[0].strip() if men else ""
-
     has_target = bool(target_kw_str and target_kw_str.strip())
     
-    # 중복 제거된 타겟 키워드 리스트
-    user_kws = []
+    # 메인 타겟 리스트 결정
     if has_target:
-        for k in target_kw_str.split(","):
-            kw = k.strip()
-            if kw and kw not in user_kws:
-                user_kws.append(kw)
-        hint_kws = [k.replace(" ", "") for k in user_kws[:5]]
+        # 입력한 타겟 키워드가 있으면 중복 제거 후 그대로 사용
+        raw_list = [k.strip() for k in target_kw_str.split(",") if k.strip()]
+        target_list = list(dict.fromkeys(raw_list)) 
     else:
-        hint_kws = [f"{last_loc}{core_men}", f"{last_loc}맛집", core_men]
+        # 타겟 키워드가 없으면, 지역+메뉴 조합으로 억지 키워드(생닭 등) 원천 차단
+        target_list = [
+            f"{loc_dong} 맛집",
+            f"{loc_dong} {core_men}",
+            f"{loc_city} 맛집",
+            f"{loc_dong} 가볼만한곳",
+            f"{loc_dong} 술집" if "술" in men or "안주" in men else f"{loc_dong} 핫플"
+        ]
 
-    params = {'hintKeywords': ",".join(hint_kws[:5]), 'showDetail': 1}
+    # API 호출용 힌트 키워드 (띄어쓰기 제거)
+    hint_kws_param = ",".join([k.replace(" ", "") for k in target_list[:5]])
+    params = {'hintKeywords': hint_kws_param, 'showDetail': 1}
     
     main_kws = []
     detail_kws = []
@@ -72,35 +84,19 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
         res = requests.get(f'https://api.naver.com{uri}', params=params, headers=headers)
         api_data = res.json().get('keywordList', []) if res.status_code == 200 else []
         
-        # 1) 메인/타겟 키워드 처리 (입력된 키워드 그대로 노출, 실제 검색량 매칭)
-        if has_target:
-            for ukw in user_kws:
-                ukw_clean = ukw.replace(" ", "")
-                if ukw_clean in seen_kws:
-                    continue
-                
-                found = next((item for item in api_data if item['relKeyword'].replace(" ", "") == ukw_clean), None)
-                if found:
-                    tot = parse_qc_cnt(found.get('monthlyPcQcCnt')) + parse_qc_cnt(found.get('monthlyMobileQcCnt'))
-                    main_kws.append({'relKeyword': ukw, 'total_search': tot})
-                else:
-                    # 네이버 API에 아예 뜨지 않는 초소형 키워드일 경우
-                    main_kws.append({'relKeyword': ukw, 'total_search': 10}) 
-                seen_kws.add(ukw_clean)
-        else:
-            # 타겟 키워드 미입력 시 네이버 최상위 대표 키워드 5개 추출
-            for item in api_data:
-                kw = item['relKeyword']
-                kw_clean = kw.replace(" ", "")
-                if kw_clean in seen_kws:
-                    continue
-                    
-                tot = parse_qc_cnt(item.get('monthlyPcQcCnt')) + parse_qc_cnt(item.get('monthlyMobileQcCnt'))
-                main_kws.append({'relKeyword': kw, 'total_search': tot})
-                seen_kws.add(kw_clean)
-                if len(main_kws) >= 5: break
-
-        # 2) 상세 연관 키워드 추출 (메인 키워드와 중복 방지)
+        # 1) 메인 키워드 처리: target_list에 있는 것만 정확히 매칭 (사용자가 2개 넣으면 2개만 노출)
+        for t_kw in target_list:
+            t_kw_clean = t_kw.replace(" ", "")
+            found = next((item for item in api_data if item['relKeyword'].replace(" ", "") == t_kw_clean), None)
+            
+            if found:
+                tot = parse_qc_cnt(found.get('monthlyPcQcCnt')) + parse_qc_cnt(found.get('monthlyMobileQcCnt'))
+                main_kws.append({'relKeyword': t_kw, 'total_search': tot})
+            else:
+                main_kws.append({'relKeyword': t_kw, 'total_search': 10}) # 조회수 10 미만 처리
+            seen_kws.add(t_kw_clean)
+            
+        # 2) 상세 연관 키워드 처리: 도매/재료 키워드 차단 및 지역명 포함 여부 강력 필터링
         for item in api_data:
             if len(detail_kws) >= 5: break
             kw = item['relKeyword']
@@ -108,19 +104,30 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
             
             if kw_clean in seen_kws:
                 continue
+                
+            # 해당 키워드에 입력된 지역명(창원, 마산, 해운 등)이 하나라도 포함되어 있는지 확인
+            is_local = any(v in kw for v in valid_locs)
             
-            # 타 지역 필터링
-            if any(broad in kw for broad in ["서울", "부산", "대구", "인천", "광주", "대전", "울산"]) and not any(r in kw for r in reg_parts):
-                continue
+            # 타겟이 없었을 경우 철저히 지역 키워드만, 타겟이 있었을 경우 연관성 기반
+            if is_local or has_target: 
+                tot = parse_qc_cnt(item.get('monthlyPcQcCnt')) + parse_qc_cnt(item.get('monthlyMobileQcCnt'))
+                detail_kws.append({'relKeyword': kw, 'total_search': tot})
+                seen_kws.add(kw_clean)
 
-            tot = parse_qc_cnt(item.get('monthlyPcQcCnt')) + parse_qc_cnt(item.get('monthlyMobileQcCnt'))
-            detail_kws.append({'relKeyword': kw, 'total_search': tot})
-            seen_kws.add(kw_clean)
+        # 상세 키워드가 부족할 경우 안전한 지역 기반 조합으로 채움
+        if len(detail_kws) < 5:
+            fb_list = [f"{loc_dong} 모임", f"{loc_city} 핫플", f"{loc_dong} 데이트", f"{loc_city} 가볼만한곳", f"{loc_dong} 추천"]
+            for fb in fb_list:
+                if len(detail_kws) >= 5: break
+                fb_clean = fb.replace(" ", "")
+                if fb_clean not in seen_kws:
+                    detail_kws.append({'relKeyword': fb, 'total_search': 10})
+                    seen_kws.add(fb_clean)
 
         return main_kws, detail_kws, "success"
 
     except Exception as e:
-        return [{'relKeyword': f"{last_loc} {core_men}", 'total_search': 0}], [], f"API 통신 오류: {str(e)}"
+        return [{'relKeyword': f"{loc_dong} {core_men}", 'total_search': 0}], [], f"API 통신 오류: {str(e)}"
 
 # --- 3. OpenAI 카피라이팅 함수 ---
 def generate_ai_content(prompt, api_key, system_role="", temp=0.7):
@@ -163,7 +170,7 @@ with tab1:
         with r1_c3: men = st.text_input("메뉴/업종", placeholder="닭다리살, 술집, 안주맛집")
         
         r2_c1, r2_c2, r2_c3 = st.columns(3)
-        with r2_c1: target_kws = st.text_input("타겟 키워드 (선택 입력, 쉼표 구분)", placeholder="창원 술집, 경남 술집")
+        with r2_c1: target_kws = st.text_input("타겟 키워드 (선택 입력, 쉼표 구분)", placeholder="창원 술집, 해운동 술집")
         with r2_c2: merit = st.text_input("매장만의 자랑거리 (선택)", placeholder="불향 가득한 닭다리살과 레트로 감성의 분위기")
         with r2_c3: event = st.text_input("이벤트 (선택)", placeholder="방문자 리뷰 작성 시 하이볼 1잔 서비스")
             
@@ -173,14 +180,14 @@ with tab1:
         if not store or not reg or not men:
             st.error("매장명, 지역, 메뉴/업종은 필수 입력 항목입니다!")
         else:
-            with st.spinner("네이버 실제 검색량 추출 및 새소식 문구 생성 중..."):
+            with st.spinner("지역 기반 정확도 높은 키워드 검색 및 문구 작성 중..."):
                 g_kws, d_kws, msg = get_naver_target_keywords(target_kws, store, reg, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
                 if msg == "success":
                     has_event = bool(event and event.strip())
                     has_merit = bool(merit and merit.strip())
                     
-                    # 노출될 키워드 문자열 합치기 (새소식 생성용)
+                    # 새소식 문구에 강제 적용할 키워드들 (타겟 키워드 1:1 매칭)
                     used_targets = ", ".join([k['relKeyword'] for k in g_kws])
                     
                     system_role = f"""당신은 '{store}'을 직접 운영하는 센스 있는 사장님입니다.
@@ -198,7 +205,7 @@ with tab1:
 
 [SEO 최적화 필수 조건 (매우 중요)]
 - **적용할 타겟 키워드**: {used_targets}
-- 위 타겟 키워드들을 새소식 본문 안에 자연스럽게 모두 한 번 이상씩 포함시켜서 작성하세요. 플레이스 검색 노출에 매우 중요합니다.
+- 위 타겟 키워드들을 새소식 본문 안의 문맥에 자연스럽게 모두 한 번 이상씩 포함시켜서 작성하세요. 이는 플레이스 상위 노출에 매우 중요합니다.
 
 [작성 가이드라인]
 1. [제목]과 [본문] 형식으로 출력하세요.
@@ -231,7 +238,7 @@ with tab1:
                     
                     box_title_left = "타겟 키워드 월간 검색량" if target_kws else "네이버 대표 키워드 검색량"
                     
-                    # 💡 실제 갯수만큼만 리스트 렌더링 (입력한 갯수 그대로 노출)
+                    # 💡 실제 입력된 갯수(혹은 추출된 갯수)만큼만 깔끔하게 렌더링
                     gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #212529;'>🎯 {k['relKeyword']}</span> <span style='font-size: 14px; font-weight: 700; color: #007bff;'>(월 검색량: {k['total_search']:,}건)</span></li>" for k in g_kws])
                     detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #212529;'>✨ {k['relKeyword']}</span> <span style='font-size: 14px; font-weight: 600; color: #666;'>(월 검색량: {k['total_search']:,}건)</span></li>" for k in d_kws])
                     
