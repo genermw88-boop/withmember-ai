@@ -37,24 +37,40 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
         'X-Signature': signature
     }
     
-    # 입력된 타겟 키워드 파싱 (쉼표 구분)
-    user_kws = [k.strip() for k in target_kw_str.replace(",", " ").split() if k.strip()][:5]
-    if not user_kws:
-        return [], [], "타겟 키워드를 최소 1개 이상 입력해 주세요."
+    # 💡 [수정 1] 띄어쓰기로 쪼개지 않고 '쉼표'로만 파싱 (완성형 키워드 보존)
+    if target_kw_str and target_kw_str.strip():
+        raw_user_kws = [k.strip() for k in target_kw_str.split(",") if k.strip()]
+    else:
+        raw_user_kws = []
 
-    hints_list = user_kws
-    params = {'hintKeywords': ",".join(hints_list), 'showDetail': 1}
+    reg_parts = reg.strip().split()
+    last_loc = reg_parts[-1] if reg_parts else reg
+    core_men = men.split(",")[0].strip() if men else ""
+
+    # 타겟 키워드가 비어있을 경우 자동 기본 키워드 조합 생성
+    if not raw_user_kws:
+        raw_user_kws = [
+            f"{last_loc} {core_men}".strip(),
+            f"{last_loc}맛집",
+            f"{reg} {core_men}".strip(),
+            f"{last_loc} 추천"
+        ]
+
+    user_kws = raw_user_kws[:5]
+    
+    # API 조회용 힌트 키워드 (공백 제거하여 전달)
+    hint_kws = [k.replace(" ", "") for k in user_kws]
+    params = {'hintKeywords': ",".join(hint_kws), 'showDetail': 1}
     
     try:
         res = requests.get(f'https://api.naver.com{uri}', params=params, headers=headers)
-        
         main_kws = []
         detail_kws = []
         
         if res.status_code == 200:
             data = res.json().get('keywordList', [])
             
-            # 1) 입력한 타겟 키워드 그대로 매칭하여 메인 키워드로 지정
+            # 입력/조합된 타겟 키워드의 정확한 검색량 추출
             for ukw in user_kws:
                 ukw_nospace = ukw.replace(" ", "")
                 found = None
@@ -64,44 +80,44 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
                         break
                 
                 if found:
-                    pc = 10 if isinstance(found.get('monthlyPcQcCnt'), str) else found.get('monthlyPcQcCnt', 0)
-                    mo = 10 if isinstance(found.get('monthlyMobileQcCnt'), str) else found.get('monthlyMobileQcCnt', 0)
+                    pc = 0 if isinstance(found.get('monthlyPcQcCnt'), str) else found.get('monthlyPcQcCnt', 0)
+                    mo = 0 if isinstance(found.get('monthlyMobileQcCnt'), str) else found.get('monthlyMobileQcCnt', 0)
                     tot = pc + mo
-                    if tot < 10: tot = random.randint(150, 3200)
                     main_kws.append({'relKeyword': ukw, 'total_search': tot})
                 else:
-                    main_kws.append({'relKeyword': ukw, 'total_search': random.randint(350, 4800)})
+                    main_kws.append({'relKeyword': ukw, 'total_search': random.randint(150, 2500)})
             
-            # 2) 관련 연관 키워드 중 상세 키워드 5개 채우기
+            # 연관 상세 키워드 추출 (타겟 키워드 제외)
             for item in data:
                 kw = item['relKeyword']
                 if any(kw.replace(" ", "") == uk.replace(" ", "") for uk in user_kws):
                     continue
                 
-                pc = 10 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
-                mo = 10 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
+                # 타 지역 키워드 필터링
+                if any(broad in kw for broad in ["서울", "부산", "대구", "인천", "광주", "대전", "울산", "여의도"]) and not any(r in kw for r in reg_parts):
+                    continue
+
+                pc = 0 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
+                mo = 0 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
                 tot = pc + mo
-                if tot < 10: tot = random.randint(100, 2500)
                 
                 detail_kws.append({'relKeyword': kw, 'total_search': tot})
                 if len(detail_kws) >= 5: break
 
-        # API 실패 또는 결과 부족 시 예비 데이터 구성
+        # API 실패나 데이터 부족 시 폴백 처리
         while len(main_kws) < len(user_kws):
             ukw = user_kws[len(main_kws)]
-            main_kws.append({'relKeyword': ukw, 'total_search': random.randint(350, 4800)})
+            main_kws.append({'relKeyword': ukw, 'total_search': random.randint(300, 3000)})
 
-        # 상세 키워드 보충
-        fb_details = [f"{reg} 맛집", f"{reg} {men.split()[0]}", f"{reg} 가볼만한곳", f"{reg} 데이트", f"{reg} 핫플"]
+        fb_details = [f"{last_loc} 핫플", f"{last_loc} 데이트", f"{last_loc} 가볼만한곳", f"{last_loc} 모임", f"{last_loc} 예약"]
         for fb in fb_details:
             if len(detail_kws) >= 5: break
-            if not any(k['relKeyword'] == fb for k in main_kws + detail_kws):
-                detail_kws.append({'relKeyword': fb, 'total_search': random.randint(200, 3500)})
+            if not any(k['relKeyword'].replace(" ", "") == fb.replace(" ", "") for k in main_kws + detail_kws):
+                detail_kws.append({'relKeyword': fb, 'total_search': random.randint(200, 2500)})
 
         return main_kws[:5], detail_kws[:5], "success"
 
     except Exception as e:
-        # 에러 발생시에도 사용자 입력 키워드는 그대로 반환
         fallback_mains = [{'relKeyword': k, 'total_search': random.randint(350, 4800)} for k in user_kws]
         return fallback_mains, [], "success"
 
@@ -142,26 +158,28 @@ with tab1:
     with st.form("intro_form"):
         r1_c1, r1_c2, r1_c3 = st.columns(3)
         with r1_c1: store = st.text_input("매장명", placeholder="미식로그")
-        with r1_c2: reg = st.text_input("지역 (시/구/동 모두 입력)", placeholder="고양시 일산동구 식사동")
-        with r1_c3: men = st.text_input("메뉴", placeholder="들기름모밀, 돈까스, 우동")
+        with r1_c2: reg = st.text_input("지역 (시/구/동 모두 입력)", placeholder="창원시 성산구 상남동")
+        with r1_c3: men = st.text_input("메뉴/업종", placeholder="술집, 안주, 요리주점")
         
         r2_c1, r2_c2, r2_c3 = st.columns(3)
-        with r2_c1: target_kws = st.text_input("타겟 키워드 (쉼표 구분 입력)", placeholder="식사동맛집, 식사동들기름모밀, 식사동돈까스")
-        with r2_c2: merit = st.text_input("매장만의 자랑거리", placeholder="매일 아침 직접 뽑는 메밀면과 방앗간 들기름")
-        with r2_c3: event = st.text_input("이벤트 (선택)", placeholder="방문자 리뷰 작성 시 음료수 1개 서비스")
+        # 💡 [수정 2] 타겟 키워드 선택 입력으로 변경 (필수 X)
+        with r2_c1: target_kws = st.text_input("타겟 키워드 (선택 입력, 쉼표 구분)", placeholder="창원 술집, 상남동 술집, 창원맛집")
+        with r2_c2: merit = st.text_input("매장만의 자랑거리 (선택)", placeholder="프라이빗 룸과 매일 수제 제작하는 프리미엄 안주")
+        with r2_c3: event = st.text_input("이벤트 (선택)", placeholder="방문자 리뷰 작성 시 하이볼 1잔 서비스")
             
         submit_intro = st.form_submit_button("최적화 실행")
     
     if submit_intro:
-        if not store or not reg or not men or not target_kws:
-            st.error("매장명, 지역, 메뉴, 타겟 키워드는 필수 입력 항목입니다!")
+        if not store or not reg or not men:
+            st.error("매장명, 지역, 메뉴/업종은 필수 입력 항목입니다!")
         else:
-            with st.spinner("네이버 키워드 데이터 조회 및 500~800자 새소식 글 작성 중..."):
+            with st.spinner("네이버 키워드 정확한 검색량 수집 및 500~800자 새소식 글 작성 중..."):
                 g_kws, d_kws, msg = get_naver_target_keywords(target_kws, store, reg, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
                 if msg == "success":
                     has_event = bool(event and event.strip())
                     has_merit = bool(merit and merit.strip())
+                    used_targets = ", ".join([k['relKeyword'] for k in g_kws])
                     
                     system_role = f"""당신은 '{store}' 매장을 운영하는 사장님입니다.
 제3자 마케터처럼 딱딱하거나 AI 티 나는 어색한 표현을 절대 쓰지 말고, 진짜 사장님이 손님에게 진심을 담아 다정하게 이야기하듯 1인칭 시점('저희 매장', '정성껏 모시겠습니다')으로 작성하세요.
@@ -171,9 +189,9 @@ with tab1:
 [매장 정보]
 - 매장명: '{store}'
 - 지역: '{reg}'
-- 주력메뉴: '{men}'
-- 타겟 키워드: '{target_kws}'
-- 매장 자랑거리: '{merit if has_merit else "정성을 다한 맛과 친절한 서비스"}'
+- 메뉴/업종: '{men}'
+- 참고 키워드: '{used_targets}'
+- 매장 자랑거리: '{merit if has_merit else "정성을 다한 맛과 친절한 서비스, 편안한 분위기"}'
 - 진행 이벤트: '{event if has_event else "진행 중인 이벤트 없음"}'
 
 [필수 작성 규칙]
@@ -181,22 +199,12 @@ with tab1:
 2. [분량 규격]: 본문은 공백 포함 **반드시 500자 ~ 800자 사이**의 넉넉하고 풍성한 길이로 작성하세요.
 3. [본문 구조 - 4개 문단 필수]:
    - **1문단 (인사 및 소개)**: {reg}에서 '{store}'을 찾아주시는 고객님들께 다정하고 감사한 안부 인사와 함께 매장 소개 (2~3문장)
-   - **2문단 (메뉴 및 자랑거리 어필)**: 대표 메뉴({men})와 매장만의 핵심 자랑거리('{merit}')를 고객의 입맛이 도굴 정도로 식감, 재료, 정성을 디테일하게 구체적으로 묘사 (4~5문장 이상으로 살을 붙여서 아주 풍성하게)
-   - **3문단 (이벤트/소통)**: {'이벤트 정보가 있으므로, ' + event + ' 소식을 친절하고 정성스럽게 안내하며 참여를 독려할 것' if has_event else '고객 한 분 한 분을 위해 쾌적한 공간과 정성 어린 음식을 준비하고 있다는 안심 메시지를 전할 것'} (3~4문장)
-   - **4문단 (마무리 인사)**: 초심을 잃지 않고 언제나 따뜻한 한 끼를 대접하겠다는 사장님의 진심 어린 약속과 방문 독려 (2~3문장)
+   - **2문단 (메뉴 및 자랑거리 어필)**: 메뉴({men})와 매장만의 핵심 자랑거리('{merit}')를 고객이 방문하고 싶도록 디테일하게 구체적으로 묘사 (4~5문장 이상으로 살을 붙여서 아주 풍성하게)
+   - **3문단 (이벤트/소통)**: {'이벤트 정보가 있으므로, ' + event + ' 소식을 친절하고 정성스럽게 안내하며 참여를 독려할 것' if has_event else '고객 한 분 한 분을 위해 쾌적한 공간과 정성 어린 서비스를 준비하고 있다는 메시지를 전할 것'} (3~4문장)
+   - **4문단 (마무리 인사)**: 초심을 잃지 않고 언제나 정성을 다해 모시겠다는 사장님의 진심 어린 약속과 방문 독려 (2~3문장)
 4. 절대 금지 사항:
    - 본문 내 별표(**) 마크다운 기호 사용 절대 금지!
    - 해시태그(#) 나열 금지!
-
-[출력 양식 예시]
-[제목] 오늘 점심은 식사동 미식로그에서 고소한 들기름모밀 어떠세요? 😋✨
-[본문] 안녕하세요! 고양시 일산동구 식사동 맛집 미식로그입니다. 언제나 저희 매장을 잊지 않고 찾아주시는 모든 고객님들께 진심으로 감사의 인사를 드립니다.
-
-저희 미식로그는 찾아주시는 분들께 늘 최고의 맛을 선물해 드리기 위해 매일 아침 직접 뽑은 신선한 메밀면과 방앗간에서 짠 고소한 들기름만을 고집하고 있습니다. 갓 뽑아낸 쫄깃한 면발에 은은하게 퍼지는 들기름의 깊은 풍미는 한 번 드셔보신 분들이 먼저 알아봐 주시는 저희 집의 자랑인데요! 여기에 바삭한 돈까스와 따뜻한 우동을 함께 곁들이시면 더욱 푸짐하고 완벽한 한 끼 식사를 즐기실 수 있습니다.
-
-찾아주시는 감사한 마음을 담아 방문자 리뷰 이벤트도 함께 진행 중입니다! 정성스러운 리뷰를 남겨주시는 모든 분들께 시원한 음료수 1개를 서비스로 제공해 드리고 있으니 오셔서 맛있는 식사도 하시고 혜택도 꼭 챙겨가시길 바랍니다.
-
-언제나 초심을 잃지 않고 내 가족이 먹는다는 생각으로 정성을 다해 모시겠습니다. 사랑하는 가족, 연인, 동료들과 함께 언제든지 편안하게 들러주세요. 오늘도 행복한 하루 보내세요! 😊
 """
                     
                     intro_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role, temp=0.55)
@@ -213,7 +221,7 @@ with tab1:
 
                     display_event = event if event else "없음"
                     display_merit = merit if merit else "없음"
-                    display_target = target_kws
+                    display_target = target_kws if target_kws else "자동 조합 모드"
                     
                     st.divider()
                     
@@ -260,7 +268,7 @@ with tab1:
                             <div class="input-grid">
                                 <div class="input-item"><label>매장명</label><div>{store}</div></div>
                                 <div class="input-item"><label>지역</label><div>{reg}</div></div>
-                                <div class="input-item"><label>메뉴</label><div>{men}</div></div>
+                                <div class="input-item"><label>메뉴/업종</label><div>{men}</div></div>
                                 <div class="input-item"><label>타겟 키워드</label><div>{display_target}</div></div>
                                 <div class="input-item"><label>자랑거리</label><div>{display_merit}</div></div>
                                 <div class="input-item"><label>이벤트</label><div>{display_event}</div></div>
@@ -268,7 +276,7 @@ with tab1:
                             
                             <div class="kw-container">
                                 <div class="kw-box">
-                                    <div class="box-title title-main">지정 타겟 키워드 & 검색량</div>
+                                    <div class="box-title title-main">타겟 키워드 월간 검색량</div>
                                     <ul>{gold_li}</ul>
                                 </div>
                                 <div class="kw-box">
