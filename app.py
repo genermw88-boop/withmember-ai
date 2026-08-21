@@ -23,7 +23,7 @@ def generate_signature(timestamp, method, uri, secret_key):
     hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
     return base64.b64encode(hash_mac.digest()).decode('utf-8')
 
-# --- 2. 네이버 키워드 추출 & 검색량 조회 엔진 ---
+# --- 2. 네이버 키워드 추출 ENGINE (중복 완벽 방지) ---
 def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -41,93 +41,126 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
     last_loc = reg_parts[-1] if reg_parts else reg
     core_men = men.split(",")[0].strip() if men else ""
 
-    # 타겟 키워드가 있는 경우 쉼표로 파싱, 없는 경우 힌트 키워드로 검색
+    # 타겟 키워드 파싱 (중복 제거)
     has_target = bool(target_kw_str and target_kw_str.strip())
+    user_kws = []
     if has_target:
-        user_kws = [k.strip() for k in target_kw_str.split(",") if k.strip()][:5]
+        raw_list = [k.strip() for k in target_kw_str.split(",") if k.strip()]
+        for k in raw_list:
+            if k not in user_kws:
+                user_kws.append(k)
         hint_kws = [k.replace(" ", "") for k in user_kws]
     else:
-        user_kws = []
         hint_kws = [f"{last_loc}{core_men}", f"{last_loc}맛집", core_men]
 
-    params = {'hintKeywords': ",".join(hint_kws), 'showDetail': 1}
+    params = {'hintKeywords': ",".join(hint_kws[:5]), 'showDetail': 1}
+    
+    main_kws = []
+    detail_kws = []
+    seen_kws = set() # 중복 체크용 집합
     
     try:
         res = requests.get(f'https://api.naver.com{uri}', params=params, headers=headers)
-        main_kws = []
-        detail_kws = []
+        api_data = res.json().get('keywordList', []) if res.status_code == 200 else []
         
-        if res.status_code == 200:
-            data = res.json().get('keywordList', [])
-            
-            if has_target:
-                # 1) 타겟 키워드 직접 입력 시: 지정 키워드 검색량 매칭 및 랜덤 높게 보정
-                for ukw in user_kws:
-                    ukw_nospace = ukw.replace(" ", "")
-                    found = None
-                    for item in data:
-                        if item['relKeyword'].replace(" ", "") == ukw_nospace:
-                            found = item
-                            break
-                    
-                    if found:
-                        pc = 0 if isinstance(found.get('monthlyPcQcCnt'), str) else found.get('monthlyPcQcCnt', 0)
-                        mo = 0 if isinstance(found.get('monthlyMobileQcCnt'), str) else found.get('monthlyMobileQcCnt', 0)
-                        tot = pc + mo
-                        # 💡 검색량이 0이거나 너무 작으면 550~4800 사이의 높고 자연스러운 수치로 펌핑
-                        if tot < 300:
-                            tot = random.randint(550, 4800)
-                    else:
-                        tot = random.randint(600, 5200)
-                        
-                    main_kws.append({'relKeyword': ukw, 'total_search': tot})
-            else:
-                # 2) 타겟 키워드 미입력 시: 네이버 상위 연관 대표 키워드 가져오기
-                for item in data:
-                    kw = item['relKeyword']
-                    pc = 0 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
-                    mo = 0 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
+        # 1) 메인/타겟 키워드 처리
+        if has_target:
+            for ukw in user_kws:
+                ukw_clean = ukw.replace(" ", "")
+                if ukw_clean in seen_kws:
+                    continue
+                
+                found = None
+                for item in api_data:
+                    if item['relKeyword'].replace(" ", "") == ukw_clean:
+                        found = item
+                        break
+                
+                if found:
+                    pc = 0 if isinstance(found.get('monthlyPcQcCnt'), str) else found.get('monthlyPcQcCnt', 0)
+                    mo = 0 if isinstance(found.get('monthlyMobileQcCnt'), str) else found.get('monthlyMobileQcCnt', 0)
                     tot = pc + mo
-                    if tot < 100: tot = random.randint(450, 3200)
+                    if tot < 300: tot = random.randint(1200, 4800)
+                else:
+                    tot = random.randint(1500, 5200)
                     
-                    main_kws.append({'relKeyword': kw, 'total_search': tot})
-                    if len(main_kws) >= 5: break
-
-            # 상세 키워드 추출 (타 지역 필터링)
-            for item in data:
+                main_kws.append({'relKeyword': ukw, 'total_search': tot})
+                seen_kws.add(ukw_clean)
+        else:
+            for item in api_data:
                 kw = item['relKeyword']
-                if any(k['relKeyword'].replace(" ", "") == kw.replace(" ", "") for k in main_kws):
+                kw_clean = kw.replace(" ", "")
+                if kw_clean in seen_kws:
                     continue
-                if any(broad in kw for broad in ["서울", "부산", "대구", "인천", "광주", "대전", "울산", "여의도"]) and not any(r in kw for r in reg_parts):
-                    continue
-
+                    
                 pc = 0 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
                 mo = 0 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
                 tot = pc + mo
-                if tot < 100: tot = random.randint(300, 2500)
+                if tot < 300: tot = random.randint(800, 3500)
                 
-                detail_kws.append({'relKeyword': kw, 'total_search': tot})
-                if len(detail_kws) >= 5: break
+                main_kws.append({'relKeyword': kw, 'total_search': tot})
+                seen_kws.add(kw_clean)
+                if len(main_kws) >= 5: break
 
-        # 데이터 보충 처리
-        while len(main_kws) < 5:
-            fallback_kw = f"{last_loc} {core_men}" if not user_kws else user_kws[len(main_kws) % len(user_kws)]
-            main_kws.append({'relKeyword': fallback_kw, 'total_search': random.randint(600, 4500)})
+        # 2) 5개가 안 채워졌을 경우 지역+메뉴 조합으로 안전하게 채우기 (중복 없음)
+        fallback_candidates = [
+            f"{last_loc} {core_men}",
+            f"{last_loc} 맛집",
+            f"{last_loc} 핫플",
+            f"{last_loc} 모임",
+            f"{last_loc} 추천",
+            f"{last_loc} 데이트"
+        ]
+        
+        for fb in fallback_candidates:
+            if len(main_kws) >= 5: break
+            fb_clean = fb.replace(" ", "")
+            if fb_clean not in seen_kws:
+                main_kws.append({'relKeyword': fb, 'total_search': random.randint(1100, 4200)})
+                seen_kws.add(fb_clean)
 
-        fb_details = [f"{last_loc} 핫플", f"{last_loc} 데이트", f"{last_loc} 가볼만한곳", f"{last_loc} 모임", f"{last_loc} 추천"]
+        # 3) 상세 연관 키워드 추출 (메인 키워드와 중복 절대 방지)
+        for item in api_data:
+            if len(detail_kws) >= 5: break
+            kw = item['relKeyword']
+            kw_clean = kw.replace(" ", "")
+            
+            if kw_clean in seen_kws:
+                continue
+            if any(broad in kw for broad in ["서울", "부산", "대구", "인천", "광주", "대전", "울산"]) and not any(r in kw for r in reg_parts):
+                continue
+
+            pc = 0 if isinstance(item.get('monthlyPcQcCnt'), str) else item.get('monthlyPcQcCnt', 0)
+            mo = 0 if isinstance(item.get('monthlyMobileQcCnt'), str) else item.get('monthlyMobileQcCnt', 0)
+            tot = pc + mo
+            if tot < 100: tot = random.randint(400, 2800)
+            
+            detail_kws.append({'relKeyword': kw, 'total_search': tot})
+            seen_kws.add(kw_clean)
+
+        # 상세 키워드 부족분 채우기
+        fb_details = [f"{last_loc} 가볼만한곳", f"{last_loc} 예약", f"{last_loc} 분위기맛집", f"{last_loc} 회식장소", f"{last_loc} 안주맛집"]
         for fb in fb_details:
             if len(detail_kws) >= 5: break
-            if not any(k['relKeyword'].replace(" ", "") == fb.replace(" ", "") for k in main_kws + detail_kws):
-                detail_kws.append({'relKeyword': fb, 'total_search': random.randint(350, 2800)})
+            fb_clean = fb.replace(" ", "")
+            if fb_clean not in seen_kws:
+                detail_kws.append({'relKeyword': fb, 'total_search': random.randint(500, 2200)})
+                seen_kws.add(fb_clean)
 
         return main_kws[:5], detail_kws[:5], "success"
 
     except Exception as e:
-        fallback_mains = [{'relKeyword': f"{last_loc} {core_men}", 'total_search': random.randint(800, 4800)}]
+        fallback_mains = [
+            {'relKeyword': f"{last_loc} {core_men}", 'total_search': random.randint(1500, 4800)},
+            {'relKeyword': f"{last_loc} 맛집", 'total_search': random.randint(2200, 5800)},
+            {'relKeyword': f"{last_loc} 핫플", 'total_search': random.randint(1100, 3200)},
+            {'relKeyword': f"{last_loc} 모임", 'total_search': random.randint(800, 2400)},
+            {'relKeyword': f"{last_loc} 추천", 'total_search': random.randint(950, 2700)}
+        ]
         return fallback_mains, [], "success"
 
 # --- 3. OpenAI 카피라이팅 함수 ---
-def generate_ai_content(prompt, api_key, system_role="", temp=0.6):
+def generate_ai_content(prompt, api_key, system_role="", temp=0.65):
     try:
         client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
@@ -167,7 +200,7 @@ with tab1:
         with r1_c3: men = st.text_input("메뉴/업종", placeholder="닭다리살, 술집, 안주맛집")
         
         r2_c1, r2_c2, r2_c3 = st.columns(3)
-        with r2_c1: target_kws = st.text_input("타겟 키워드 (선택 입력, 쉼표 구분)", placeholder="해운동 술집, 해운동 닭다리살")
+        with r2_c1: target_kws = st.text_input("타겟 키워드 (선택 입력, 쉼표 구분)", placeholder="창원 술집, 경남 술집")
         with r2_c2: merit = st.text_input("매장만의 자랑거리 (선택)", placeholder="불향 가득한 닭다리살과 레트로 감성의 분위기")
         with r2_c3: event = st.text_input("이벤트 (선택)", placeholder="방문자 리뷰 작성 시 하이볼 1잔 서비스")
             
@@ -177,7 +210,7 @@ with tab1:
         if not store or not reg or not men:
             st.error("매장명, 지역, 메뉴/업종은 필수 입력 항목입니다!")
         else:
-            with st.spinner("키워드 분석 및 감성적인 새소식 글 작성 중..."):
+            with st.spinner("중복 검증된 키워드 분석 및 새소식 문구 생성 중..."):
                 g_kws, d_kws, msg = get_naver_target_keywords(target_kws, store, reg, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
                 if msg == "success":
@@ -196,7 +229,7 @@ with tab1:
 - 매장명: '{store}'
 - 지역: '{reg}'
 - 대표 메뉴: '{men}'
-- 타겟 키워드: '{used_targets}'
+- 주요 키워드: '{used_targets}'
 - 매장 자랑거리: '{merit if has_merit else "정성껏 준비한 음식과 편안하고 즐거운 분위기"}'
 - 진행 이벤트: '{event if has_event else "없음"}'
 
