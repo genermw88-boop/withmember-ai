@@ -187,7 +187,7 @@ def generate_ai_content(prompt, api_key, system_role="", temp=0.5):
                 {"role": "system", "content": system_role},
                 {"role": "user", "content": prompt}
             ],
-            temperature=temp # 길고 다채로운 표현을 위해 temp 소폭 상승
+            temperature=temp
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
@@ -208,15 +208,19 @@ with st.sidebar:
 
 st.header("위드멤버 플레이스 최적화 시스템")
 
-tab1, tab2 = st.tabs(["키워드 & 소개글", "방문자 리뷰 답글"])
+tab1, tab2 = st.tabs(["키워드 & 새소식 문구", "방문자 리뷰 답글"])
 
 with tab1:
     with st.form("intro_form"):
-        c1, c2, c3, c4 = st.columns(4)
-        with c1: store = st.text_input("매장명", placeholder="미식로그")
-        with c2: reg = st.text_input("지역 (시/구/동 모두 입력)", placeholder="고양시 일산동구 식사동")
-        with c3: men = st.text_input("메뉴", placeholder="들기름모밀, 돈까스, 우동")
-        with c4: event = st.text_input("이벤트 (선택)", placeholder="방문자 리뷰 이벤트(음료수 1개 서비스)")
+        r1_c1, r1_c2, r1_c3 = st.columns(3)
+        with r1_c1: store = st.text_input("매장명", placeholder="미식로그")
+        with r1_c2: reg = st.text_input("지역 (시/구/동 모두 입력)", placeholder="고양시 일산동구 식사동")
+        with r1_c3: men = st.text_input("메뉴", placeholder="들기름모밀, 돈까스, 우동")
+        
+        r2_c1, r2_c2, r2_c3 = st.columns(3)
+        with r2_c1: target_kws = st.text_input("타겟 키워드 3개 (쉼표 구분)", placeholder="식사동맛집, 일산들기름모밀, 일산돈까스")
+        with r2_c2: merit = st.text_input("매장만의 자랑거리", placeholder="매일 아침 직접 뽑는 메밀면과 방간 들기름")
+        with r2_c3: event = st.text_input("이벤트 (선택)", placeholder="리뷰 작성 시 음료수 서비스")
             
         submit_intro = st.form_submit_button("최적화 실행")
     
@@ -224,71 +228,60 @@ with tab1:
         if not store or not reg or not men:
             st.error("매장명, 지역, 메뉴는 필수 입력입니다!")
         else:
-            with st.spinner("네이버 상권 데이터 수집 및 소개글을 길고 풍성하게 생성 중입니다... (약 15초 소요)"):
+            with st.spinner("네이버 상권 데이터 수집 및 새소식 소개글 생성 중입니다..."):
                 g_kws, d_kws, msg = get_naver_real_keywords(store, reg, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
                 
                 if msg == "success":
-                    all_real_kws = [k['relKeyword'] for k in g_kws + d_kws]
                     has_event = bool(event and event.strip())
+                    has_merit = bool(merit and merit.strip())
                     
-                    system_role = f"""당신은 '{store}' 매장을 운영하는 사장님입니다.
-3자 마케터처럼 딱딱하거나 AI 티 나는 어색한 문장을 쓰지 말고, 진짜 사장님이 손님에게 다정하게 이야기하듯 1인칭 시점('저희 집', '모시겠습니다')으로 작성하세요.
-절대로 문단을 통째로 뭉쳐 쓰지 말고, 문단과 문단 사이에 엔터 두 번(\\n\\n)을 넣어 확연히 구분해 작성하세요."""
+                    system_role = f"""당신은 '{store}' 매장을 운영하는 대표 사장님입니다.
+3자 마케터처럼 딱딱하거나 AI 티 나는 어색한 문장을 쓰지 말고, 사장님이 고객에게 다정하고 친근하게 이야기하듯 1인칭 시점('저희 매장', '모시겠습니다')으로 작성하세요."""
 
-                    # 💡 [핵심 개선] 글자 수 확장 및 각 문단별 세부 지시 추가
                     prompt = f"""
 [매장 정보]
 - 매장명: '{store}'
 - 지역: '{reg}'
 - 주력메뉴: '{men}'
-- 이벤트: '{event if has_event else "진행 중인 이벤트 없음"}'
-
-[참고 타겟 키워드]
-{', '.join(all_real_kws)}
+- 타겟 키워드: '{target_kws if target_kws else "없음"}'
+- 매장 자랑거리: '{merit if has_merit else "없음"}'
+- 이벤트: '{event if has_event else "없음"}'
 
 [필수 작성 규칙]
 1. [제목]과 [본문] 형태로 출력하세요.
-2. [본문 분량 및 구조]: 전체 공백 포함 500자 이상이 되도록 기존보다 훨씬 더 길고 풍성하게 작성하세요! 반드시 아래 4개의 문단으로 나누고, 문단 사이에는 엔터 두 번(\\n\\n)을 넣어 문단을 명확히 분리하세요.
+2. [분량 규격]: 본문은 공백 포함 반드시 **50자~100자 내외**로 명확하고 임팩트 있게 작성하세요. (너무 길거나 쓸데없는 설명 금지)
+3. [본문 구성]:
+   - 매장 대표로서 다정한 인사와 함께 매장의 핵심 자랑거리('{merit}') 또는 타겟 키워드({target_kws})를 자연스럽게 녹여내어 소개하세요.
+   - 이벤트 내용('{event}')이 있다면 핵심만 깔끔히 언급하고 방문을 당부하는 인사로 마무리하세요.
+4. 절대 금지 사항:
+   - 본문 내 별표(**) 마크다운 기호 절대 금지!
+   - 해시태그(#) 나열 금지!
 
-   - 1문단: {reg} 맛집 '{store}'입니다. (첫 인사와 함께 매장을 찾아주시는 고객님들께 다정한 안부 인사 등 1~2문장으로 시작)
-   - 2문단: 주력 메뉴({men})에 대한 상세한 어필. 맛, 고소함, 바삭함, 식감, 재료의 신선함, 메뉴 간의 찰떡 궁합 등을 고객이 상상하며 침이 고이도록 아주 구체적이고 길게 묘사하세요 (반드시 3~4문장 이상으로 살을 붙여서 길게 작성할 것)
-   - 3문단: {'이벤트 정보가 있으므로, ' + event + ' 진행 소식을 안내하세요. 단순히 사실만 적지 말고, 고객에 대한 감사한 마음이나 넉넉한 인심을 덧붙여 2~3문장 이상으로 정성스럽게 작성할 것' if has_event else '이벤트가 없으므로 3문단은 아예 작성하지 말고 생략할 것'}
-   - 4문단: 기분 좋은 한 끼가 될 수 있도록 늘 초심을 잃지 않고 정성을 다해 모시겠다는 진심 어린 마무리 인사와 방문 독려 (2문장 이상으로 길게)
-
-3. 절대 금지 사항:
-   - "특별한 이벤트는 없지만" 같은 어색하고 모순된 표현 절대 금지!
-   - 본문 내 텍스트에 별표(**) 마크다운 기호 절대 금지!
-   - 글 끝에 해시태그(#)나 추천 키워드 목록 나열 절대 금지!
-
-[출력 양식 모범 예시 - 아래 양식의 줄바꿈 방식을 100% 동일하게 따라 하되, 내용은 훨씬 더 길게 쓸 것]
-[제목] 오늘 점심은 식사동 미식로그에서 고소한 들기름모밀 어떠세요? 😋✨
-[본문] 고양시 일산동구 식사동 맛집 미식로그입니다. 언제나 잊지 않고 저희 매장을 찾아주시는 모든 분들께 진심으로 감사의 인사를 드립니다.
-
-들기름의 깊은 풍미를 담아낸 들기름모밀과 바삭한 돈까스, 우동을 함께 즐기는 돈까스우동세트는 드셔보신 분들이 먼저 인정해 주시는 저희 집 인기 메뉴인데요! (여기에 재료의 맛과 식감, 정성에 대한 구체적인 문장을 2~3줄 더 덧붙여서 아주 길고 맛있게 묘사할 것)
-
-찾아주시는 성원에 보답하고자 방문자 리뷰 이벤트(음료수 1개 서비스)도 함께 진행하고 있습니다! (여기에 고객에 대한 감사함과 혜택에 대한 설명을 한두 줄 더 덧붙여 길게 작성할 것)
-
-기분 좋은 한 끼가 될 수 있도록 늘 초심을 잃지 않고 정성을 다해 모시겠습니다. 사랑하는 가족, 연인, 친구들과 함께 언제든지 편하게 들러주세요! 😊
+[출력 양식 예시]
+[제목] 정성을 담은 한 끼, 미식로그로 오세요! 😋
+[본문] 안녕하세요! 식사동 맛집 미식로그입니다. 저희는 매일 아침 직접 뽑은 생면과 고소한 방간 들기름으로 정성껏 모십니다. 리뷰 작성 시 시원한 음료수 서비스도 드리니 꼭 방문해주세요!
 """
                     
-                    intro_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role, temp=0.5)
+                    intro_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role, temp=0.4)
                     
                     if "[제목]" in intro_res and "[본문]" in intro_res:
                         parts = intro_res.split("[본문]")
                         title_part = parts[0].replace("[제목]", "").strip()
                         body_part = parts[1].strip()
                         
-                        body_html = body_part.replace('\n\n', '<br><br>').replace('\n', '<br>')
-                        intro_html = f"<h4 style='color: #007bff; margin-top: 0; margin-bottom: 20px; font-size: 18px;'>{title_part}</h4><div style='border-top: 1px dashed #dee2e6; margin-bottom: 20px;'></div><div style='line-height: 1.8; font-size: 15px;'>{body_html}</div>"
+                        body_html = body_part.replace('\n', '<br>')
+                        intro_html = f"<h4 style='color: #007bff; margin-top: 0; margin-bottom: 12px; font-size: 17px;'>{title_part}</h4><div style='border-top: 1px dashed #dee2e6; margin-bottom: 12px;'></div><div style='line-height: 1.6; font-size: 14px;'>{body_html}</div>"
                     else:
-                        intro_html = intro_res.replace('\n\n', '<br><br>').replace('\n', '<br>')
+                        intro_html = intro_res.replace('\n', '<br>')
 
                     display_event = event if event else "없음"
+                    display_merit = merit if merit else "없음"
+                    display_target = target_kws if target_kws else "없음"
                     
                     st.divider()
                     
-                    gold_li = "".join([f"<li style='padding: 14px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 16px; font-weight: 700; color: #212529;'>🎯 {k['relKeyword']}</span> <span style='font-size: 16px; font-weight: 700; color: #212529;'>(검색량: {k['total_search']:,}건)</span></li>" for k in g_kws])
-                    detail_li = "".join([f"<li style='padding: 14px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 16px; font-weight: 700; color: #212529;'>✨ {k['relKeyword']}</span> <span style='font-size: 16px; font-weight: 700; color: #212529;'>(검색량: {k['total_search']:,}건)</span></li>" for k in d_kws])
+                    gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #212529;'>🎯 {k['relKeyword']}</span> <span style='font-size: 14px; font-weight: 600; color: #666;'>(검색량: {k['total_search']:,}건)</span></li>" for k in g_kws])
+                    detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #212529;'>✨ {k['relKeyword']}</span> <span style='font-size: 14px; font-weight: 600; color: #666;'>(검색량: {k['total_search']:,}건)</span></li>" for k in d_kws])
                     
                     html_content = f"""
                     <!DOCTYPE html>
@@ -301,23 +294,23 @@ with tab1:
                             .report-box {{ width: 100%; max-width: 800px; padding: 25px; background: #ffffff; box-sizing: border-box; }}
                             
                             .header-title {{ border-bottom: 1px solid #ddd; padding-bottom: 15px; margin-bottom: 25px; }}
-                            .header-title h2 {{ color: #212529; font-size: 26px; margin: 0; font-weight: 800; }}
+                            .header-title h2 {{ color: #212529; font-size: 24px; margin: 0; font-weight: 800; }}
                             
-                            .input-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 35px; }}
-                            .input-item label {{ display: block; font-size: 13px; font-weight: 600; color: #666; margin-bottom: 6px; }}
-                            .input-item div {{ background-color: #f8f9fa; border: 1px solid #e9ecef; padding: 12px; border-radius: 6px; font-size: 15px; font-weight: 600; color: #212529; }}
+                            .input-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 25px; }}
+                            .input-item label {{ display: block; font-size: 12px; font-weight: 600; color: #666; margin-bottom: 4px; }}
+                            .input-item div {{ background-color: #f8f9fa; border: 1px solid #e9ecef; padding: 8px 10px; border-radius: 6px; font-size: 13px; font-weight: 600; color: #212529; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
                             
-                            .kw-container {{ display: flex; justify-content: space-between; gap: 20px; margin-bottom: 35px; }}
+                            .kw-container {{ display: flex; justify-content: space-between; gap: 20px; margin-bottom: 25px; }}
                             .kw-box {{ flex: 1; }}
-                            .box-title {{ padding: 14px 15px; border-radius: 6px; font-size: 17px; font-weight: bold; margin-bottom: 15px; text-align: center; }}
+                            .box-title {{ padding: 10px 12px; border-radius: 6px; font-size: 15px; font-weight: bold; margin-bottom: 10px; text-align: center; }}
                             .title-main {{ background-color: #f8f9fa; border: 1px solid #dee2e6; color: #212529; }}
                             .title-detail {{ background-color: #f8f9fa; border: 1px solid #dee2e6; color: #212529; }}
                             ul {{ list-style: none; padding: 0; margin: 0; }}
                             
-                            .intro-section h3 {{ font-size: 22px; color: #212529; margin-bottom: 15px; font-weight: 800; }}
-                            .intro-box {{ background-color: #f8f9fa; padding: 25px; border-radius: 8px; border: 1px solid #dee2e6; color: #212529; }}
+                            .intro-section h3 {{ font-size: 18px; color: #212529; margin-bottom: 10px; font-weight: 800; }}
+                            .intro-box {{ background-color: #f8f9fa; padding: 18px; border-radius: 8px; border: 1px solid #dee2e6; color: #212529; }}
                             
-                            .btn-down {{ margin-top: 25px; padding: 16px; background-color: #343a40; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 18px; font-weight: bold; width: 100%; max-width: 800px; text-align: center; transition: 0.2s; }}
+                            .btn-down {{ margin-top: 20px; padding: 14px; background-color: #343a40; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: bold; width: 100%; max-width: 800px; text-align: center; transition: 0.2s; }}
                             .btn-down:hover {{ background-color: #212529; }}
                         </style>
                     </head>
@@ -331,7 +324,9 @@ with tab1:
                                 <div class="input-item"><label>매장명</label><div>{store}</div></div>
                                 <div class="input-item"><label>지역</label><div>{reg}</div></div>
                                 <div class="input-item"><label>메뉴</label><div>{men}</div></div>
-                                <div class="input-item"><label>이벤트 (선택)</label><div>{display_event}</div></div>
+                                <div class="input-item"><label>타겟 키워드</label><div>{display_target}</div></div>
+                                <div class="input-item"><label>자랑거리</label><div>{display_merit}</div></div>
+                                <div class="input-item"><label>이벤트</label><div>{display_event}</div></div>
                             </div>
                             
                             <div class="kw-container">
@@ -346,7 +341,7 @@ with tab1:
                             </div>
                             
                             <div class="intro-section">
-                                <h3>최적화 소개글 (새소식)</h3>
+                                <h3>최적화 새소식 문구 (50자~100자)</h3>
                                 <div class="intro-box">{intro_html}</div>
                             </div>
                         </div>
@@ -368,7 +363,7 @@ with tab1:
                     </html>
                     """
                     
-                    components.html(html_content, height=1000, scrolling=True)
+                    components.html(html_content, height=850, scrolling=True)
                     
                     st.caption("텍스트 복사용 원본")
                     st.code(intro_res)
