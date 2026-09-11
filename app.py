@@ -60,20 +60,34 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
     valid_locs = [p.replace("시","").replace("군","").replace("구","").replace("동","").replace("읍","").replace("면","") for p in reg_parts]
     valid_locs = [v for v in valid_locs if len(v) >= 1]
     
-    core_men = men.split(",")[0].strip() if men else ""
+    core_men = men.split(",")[0].strip() if men else "추천"
     has_target = bool(target_kw_str and target_kw_str.strip())
+    
+    # 음식점/외식업 키워드 포함 여부 판별
+    food_keywords = ["맛집", "음식점", "식당", "술집", "주점", "카페", "베이커리", "디저트", "고기", "횟집", "치킨", "피자", "중식", "한식", "일식", "양식", "안주"]
+    is_food = any(fk in men for fk in food_keywords)
     
     if has_target:
         raw_list = [k.strip() for k in target_kw_str.split(",") if k.strip()]
         target_list = list(dict.fromkeys(raw_list)) 
     else:
-        target_list = [
-            f"{loc_dong} 맛집",
-            f"{loc_dong} {core_men}",
-            f"{loc_city} 맛집",
-            f"{loc_dong} 가볼만한곳",
-            f"{loc_dong} 술집" if ("술" in men or "안주" in men) else f"{loc_dong} 핫플"
-        ]
+        # 업종에 따라 타겟 키워드 목록 자동 분기 처리
+        if is_food:
+            target_list = [
+                f"{loc_dong} 맛집",
+                f"{loc_dong} {core_men}",
+                f"{loc_city} 맛집",
+                f"{loc_dong} 가볼만한곳",
+                f"{loc_dong} 술집" if ("술" in men or "안주" in men) else f"{loc_dong} 핫플"
+            ]
+        else:
+            target_list = [
+                f"{loc_dong} {core_men}",
+                f"{loc_city} {core_men}",
+                f"{loc_dong} {core_men} 추천",
+                f"{loc_dong} 가볼만한곳",
+                f"{loc_dong} 추천"
+            ]
 
     hint_kws_param = ",".join([k.replace(" ", "") for k in target_list[:5]])
     params = {'hintKeywords': hint_kws_param, 'showDetail': 1}
@@ -118,7 +132,7 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
                 seen_kws.add(kw_clean)
 
         if len(detail_kws) < 5:
-            fb_list = [f"{loc_dong} 모임", f"{loc_city} 핫플", f"{loc_dong} 데이트", f"{loc_city} 가볼만한곳", f"{loc_dong} 추천"]
+            fb_list = [f"{loc_dong} {core_men} 추천", f"{loc_city} {core_men}", f"{loc_dong} 가볼만한곳", f"{loc_dong} 추천", f"{loc_city} 추천"]
             for fb in fb_list:
                 if len(detail_kws) >= 5: break
                 fb_clean = fb.replace(" ", "")
@@ -169,14 +183,14 @@ tab1, tab2 = st.tabs(["키워드 & 새소식 문구", "방문자 리뷰 답글"]
 with tab1:
     with st.form("intro_form"):
         r1_c1, r1_c2, r1_c3 = st.columns(3)
-        with r1_c1: store = st.text_input("매장명", placeholder="하단끝집 마산경남대점")
-        with r1_c2: reg = st.text_input("지역 (시/구/동 모두 입력)", placeholder="경남 창원시 마산합포구 해운동")
-        with r1_c3: men = st.text_input("메뉴/업종", placeholder="닭다리살, 술집, 안주맛집")
+        with r1_c1: store = st.text_input("매장명", placeholder="예: 하단끝집 마산경남대점, 헤어살롱 라온")
+        with r1_c2: reg = st.text_input("지역 (시/구/동 모두 입력)", placeholder="예: 경남 창원시 마산합포구 해운동")
+        with r1_c3: men = st.text_input("메뉴/업종", placeholder="예: 미용실, 헬스장, 안주맛집, 닭다리살")
         
         r2_c1, r2_c2, r2_c3 = st.columns(3)
-        with r2_c1: target_kws = st.text_input("타겟 키워드 (선택 입력, 쉼표 구분)", placeholder="창원 술집, 해운동 술집")
-        with r2_c2: merit = st.text_input("매장만의 자랑거리 (선택)", placeholder="불향 가득한 닭다리살과 레트로 감성의 분위기")
-        with r2_c3: event = st.text_input("이벤트 (선택)", placeholder="방문자 리뷰 작성 시 하이볼 1잔 서비스")
+        with r2_c1: target_kws = st.text_input("타겟 키워드 (선택 입력, 쉼표 구분)", placeholder="예: 창원 미용실, 해운동 미용실")
+        with r2_c2: merit = st.text_input("매장만의 자랑거리 (선택)", placeholder="예: 1:1 맞춤 헤어 컨설팅 및 최고급 프리미엄 제품 사용")
+        with r2_c3: event = st.text_input("이벤트 (선택)", placeholder="예: 첫 방문 고객 20% 할인 이벤트")
             
         submit_intro = st.form_submit_button("최적화 실행")
     
@@ -195,15 +209,15 @@ with tab1:
                     
                     system_role = f"""당신은 '{store}'을 직접 운영하는 친절하고 센스 있는 사장님입니다.
 로봇 같은 어투를 절대 쓰지 마세요.
-문단마다 어울리는 친근한 이모티콘(✨, 😋, 🍻, 🔥, ❤️, 👍 등)을 듬뿍 사용하여 보기 좋게 작성하세요.
+문단마다 어울리는 친근한 이모티콘(✨, 💖, 👍, 🔥, 😊, 👏 등)을 듬뿍 사용하여 보기 좋게 작성하세요.
 각 문단 사이에는 엔터 두 번(\\n\\n)을 넣어 가독성을 높이세요."""
 
                     prompt = f"""
 [매장 정보]
 - 매장명: '{store}'
 - 지역: '{reg}'
-- 대표 메뉴: '{men}'
-- 매장 자랑거리: '{merit if has_merit else "정성껏 준비한 음식과 편안하고 즐거운 분위기"}'
+- 메뉴/업종: '{men}'
+- 매장 자랑거리: '{merit if has_merit else "정성껏 준비한 서비스와 편안하고 즐거운 분위기"}'
 - 진행 이벤트: '{event if has_event else "없음"}'
 
 [SEO 및 자연스러운 문구 반영 필수 조건]
@@ -211,17 +225,17 @@ with tab1:
    - 지정 키워드: [{used_targets}]
    - 위 키워드들을 새소식 본문의 문맥 흐름에 자연스럽게 녹여서 한 번 이상씩 반드시 포함시키세요.
 2. **매장 자랑거리 자연스럽게 녹여내기 (매우 중요)**:
-   - 입력된 자랑거리: '{merit if has_merit else "정성스러운 음식과 분위기"}'
-   - 위 자랑거리를 문단에 어색하지 않게 손님의 입맛과 방문 욕구를 자극하도록 문장 속에 자연스럽게 스며들게 작성하세요. 절대 키워드만 툭 던지지 마세요.
+   - 입력된 자랑거리: '{merit if has_merit else "정성스러운 서비스와 분위기"}'
+   - 위 자랑거리를 업종 특성에 맞게 손님의 방문 욕구를 자극하도록 문장 속에 자연스럽게 스며들게 작성하세요. 절대 키워드만 툭 던지지 마세요.
 
 [작성 가이드라인]
 1. [제목]과 [본문] 형식으로 출력하세요.
 2. [제목]: 시선을 사로잡는 매력적인 제목 (이모티콘 포함)
 3. [본문 분량]: 공백 포함 500자 ~ 800자 사이
 4. [본문 구성 - 4개 문단 필수]:
-   - 1문단: 손님들께 보내는 따뜻한 안부 인사와 매장 소개 💛 (2~3문장)
-   - 2문단: 대표 메뉴와 함께 입력된 매장 자랑거리를 입체적이고 침샘 자극하게 어필 🔥 (4~5문장 이상)
-   - 3문단: {'이벤트 소식을 안내하며 방문 독려' if has_event else '편안하게 힐링할 수 있는 공간임을 어필'} ✨ (3~4문장)
+   - 1문단: 손님들께 보내는 따뜻한 안부 인사와 매장/업종 소개 💛 (2~3문장)
+   - 2문단: 주요 메뉴/서비스와 함께 입력된 매장 자랑거리를 매력적이고 방문 욕구가 생기도록 어필 🔥 (4~5문장 이상)
+   - 3문단: {'이벤트 소식을 안내하며 방문 독려' if has_event else '편안하게 방문하여 힐링할 수 있는 공간임을 어필'} ✨ (3~4문장)
    - 4문단: 진심 어린 사장님의 맺음말과 초대 인사 👏 (2~3문장)
 5. 절대 주의사항: 부정적인 표현 금지, 해시태그(#) 절대 금지.
 """
