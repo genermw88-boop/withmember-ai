@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import base64
 import requests
+import random
 from openai import OpenAI
 
 # --- 1. 환경 설정 및 API 키 ---
@@ -38,7 +39,7 @@ def ensure_min_search_volume(kw_str, raw_count):
     seed = abs(hash(kw_str)) % 1600
     return 1200 + seed
 
-# --- 2. 네이버 키워드 및 검색량 추출 ENGINE (실효성 있는 조합으로 무조건 5개씩 보장) ---
+# --- 2. 네이버 키워드 및 검색량 추출 ENGINE (무조건 각 5개씩 보장) ---
 def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -62,7 +63,7 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
     food_keywords = ["맛집", "음식점", "식당", "술집", "주점", "카페", "베이커리", "디저트", "고기", "횟집", "치킨", "피자", "중식", "한식", "일식", "양식", "안주"]
     is_food = any(fk in men for fk in food_keywords)
     
-    # 1) 대표(메인) 키워드 5개 강제 생성 (지역 + 업종/메뉴 조합)
+    # 1) 대표(메인) 키워드 5개 강제 생성
     if has_target:
         raw_list = [k.strip() for k in target_kw_str.split(",") if k.strip()]
         main_list = list(dict.fromkeys(raw_list)) 
@@ -88,7 +89,7 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
         main_list.append(f"{loc_dong} {core_men} 전문")
     main_list = main_list[:5]
 
-    # 2) 추천 연관 상세 키워드 5개 강제 생성 (파생 지역 조합)
+    # 2) 추천 연관 상세 키워드 5개 강제 생성 풀
     if is_food:
         detail_pool = [
             f"{loc_city} {core_men}",
@@ -119,7 +120,6 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
         res = requests.get(f'https://api.naver.com{uri}', params=params, headers=headers)
         api_data = res.json().get('keywordList', []) if res.status_code == 200 else []
         
-        # API 결과에서 검색량 매칭 함수
         def get_qcs(kw):
             kw_clean = kw.replace(" ", "")
             found = next((item for item in api_data if item['relKeyword'].replace(" ", "") == kw_clean), None)
@@ -129,13 +129,11 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
                 raw_tot = 0
             return ensure_min_search_volume(kw, raw_tot)
 
-        # 메인 5개 구성
         for t_kw in main_list:
             tot = get_qcs(t_kw)
             main_kws.append({'relKeyword': t_kw, 'total_search': tot})
             seen_kws.add(t_kw.replace(" ", ""))
 
-        # 연관 상세 5개 구성 (API 데이터 우선, 부족하면 풀에서 채움)
         for item in api_data:
             if len(detail_kws) >= 5: break
             kw = item['relKeyword']
@@ -308,7 +306,7 @@ with tab1:
                             </div>
                             
                             <div class="input-grid">
-                                <div class="input-item"><label>매장명</label><div>{store}</div></div>
+                                .input-item<label>매장명</label><div>{store}</div>
                                 <div class="input-item"><label>지역</label><div>{reg}</div></div>
                                 <div class="input-item"><label>메뉴/업종</label><div>{men}</div></div>
                                 <div class="input-item"><label>타겟 키워드</label><div>{display_target}</div></div>
@@ -370,9 +368,19 @@ with tab2:
             st.warning("리뷰 내용을 입력해주세요!")
         else:
             with st.spinner("정성스러운 답글을 작성 중 (300자 내외)..."):
-                # 💡 방문자 리뷰 답글 글자수 300자 내외로 수정 반영
+                # 💡 다양한 인사말 후보군 리스트 생성 후 랜덤 선택 부여
+                greeting_styles = [
+                    "먼저 저희 매장에 발걸음해 주셔서 정말 반가워요! 😊",
+                    "소중한 시간을 내어 찾아주시고 멋진 리뷰까지 남겨주셔서 진심으로 감사드려요! 💖",
+                    "이렇게 찾아주신 것만으로도 감사한데, 따뜻한 마음 담긴 리뷰까지 남겨주시다니 정말 감동이에요! ✨",
+                    "저희 매장과 함께 즐거운 시간 보내셨다니 사장으로서 너무나 큰 보람을 느껴요! 🙌",
+                    "귀한 발걸음 해 주신 것도 감사한데, 이렇게 정성 가득한 리뷰까지 남겨주셔서 정말 힘이 나요! 💛"
+                ]
+                selected_greeting = random.choice(greeting_styles)
+
                 prompt = f"""다음 손님의 리뷰에 대해 정말 감사해하는 친근하고 정성스러운 사장님 톤으로 답글을 작성해 주세요. 
-[필수 조건] 
+[필수 반영 조건]
+- 답글의 첫 시작은 반드시 다음 문구 중 하나 또는 이에 준하는 다정한 문장으로 자연스럽게 시작하세요: "{selected_greeting}"
 - **글자수 분량: 공백 포함 300자 내외**로 알차고 풍성하게 작성하세요. (단답형 절대 금지, 3~4문장으로 정성스럽게 작성)
 - '~랍니다', '~습니다', '~합니다' 같은 딱딱하거나 어색한 표현은 절대 쓰지 마세요. 
 - **'~했어요', '~해주셔서 감사해요'** 같은 깔끔하고 부드러운 해요체만 사용하세요. 
@@ -383,7 +391,7 @@ with tab2:
 
 리뷰내용: {review_content}"""
                 
-                review_res = generate_ai_content(prompt, O_API_KEY, temp=0.7)
+                review_res = generate_ai_content(prompt, O_API_KEY, temp=0.8)
                 st.success("작성된 답글:")
                 st.write(review_res)
                 st.code(review_res)
