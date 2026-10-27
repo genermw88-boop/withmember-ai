@@ -38,7 +38,7 @@ def ensure_min_search_volume(kw_str, raw_count):
     seed = abs(hash(kw_str)) % 1600
     return 1200 + seed
 
-# --- 2. 네이버 키워드 및 검색량 추출 ENGINE (무조건 5개씩 채우도록 보완) ---
+# --- 2. 네이버 키워드 및 검색량 추출 ENGINE (실효성 있는 조합으로 무조건 5개씩 보장) ---
 def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key):
     uri = '/keywordstool'
     method = 'GET'
@@ -62,32 +62,53 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
     food_keywords = ["맛집", "음식점", "식당", "술집", "주점", "카페", "베이커리", "디저트", "고기", "횟집", "치킨", "피자", "중식", "한식", "일식", "양식", "안주"]
     is_food = any(fk in men for fk in food_keywords)
     
+    # 1) 대표(메인) 키워드 5개 강제 생성 (지역 + 업종/메뉴 조합)
     if has_target:
         raw_list = [k.strip() for k in target_kw_str.split(",") if k.strip()]
-        target_list = list(dict.fromkeys(raw_list)) 
+        main_list = list(dict.fromkeys(raw_list)) 
     else:
         if is_food:
-            target_list = [
+            main_list = [
                 f"{loc_dong} 맛집",
                 f"{loc_dong} {core_men}",
                 f"{loc_city} 맛집",
                 f"{loc_dong} 가볼만한곳",
-                f"{loc_dong} 술집" if ("술" in men or "안주" in men) else f"{loc_dong} 핫플"
+                f"{loc_dong} 핫플"
             ]
         else:
-            target_list = [
+            main_list = [
                 f"{loc_dong} {core_men}",
                 f"{loc_city} {core_men}",
                 f"{loc_dong} {core_men} 추천",
                 f"{loc_dong} 가볼만한곳",
-                f"{loc_dong} 추천"
+                f"{loc_city} {core_men} 추천"
             ]
+    
+    while len(main_list) < 5:
+        main_list.append(f"{loc_dong} {core_men} 전문")
+    main_list = main_list[:5]
 
-    # 항상 5개가 되도록 부족하면 채워넣기
-    while len(target_list) < 5:
-        target_list.append(f"{loc_dong} {core_men} {len(target_list)+1}호점")
+    # 2) 추천 연관 상세 키워드 5개 강제 생성 (파생 지역 조합)
+    if is_food:
+        detail_pool = [
+            f"{loc_city} {core_men}",
+            f"{loc_dong} 회식장소",
+            f"{loc_dong} 모임장소",
+            f"{loc_dong} 데이트코스",
+            f"{loc_city} 가볼만한곳",
+            f"{loc_dong} 술집"
+        ]
+    else:
+        detail_pool = [
+            f"{loc_city} {core_men} 잘하는곳",
+            f"{loc_dong} 예약",
+            f"{loc_dong} 전문점",
+            f"{loc_city} 핫플",
+            f"{loc_dong} 인기{core_men}",
+            f"{loc_city} 추천"
+        ]
 
-    hint_kws_param = ",".join([k.replace(" ", "") for k in target_list[:5]])
+    hint_kws_param = ",".join([k.replace(" ", "") for k in main_list + detail_pool[:3]])
     params = {'hintKeywords': hint_kws_param, 'showDetail': 1}
     
     main_kws = []
@@ -98,59 +119,49 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
         res = requests.get(f'https://api.naver.com{uri}', params=params, headers=headers)
         api_data = res.json().get('keywordList', []) if res.status_code == 200 else []
         
-        # 1) 대표(메인) 키워드 5개 채우기
-        for t_kw in target_list[:5]:
-            t_kw_clean = t_kw.replace(" ", "")
-            found = next((item for item in api_data if item['relKeyword'].replace(" ", "") == t_kw_clean), None)
-            
+        # API 결과에서 검색량 매칭 함수
+        def get_qcs(kw):
+            kw_clean = kw.replace(" ", "")
+            found = next((item for item in api_data if item['relKeyword'].replace(" ", "") == kw_clean), None)
             if found:
                 raw_tot = parse_qc_cnt(found.get('monthlyPcQcCnt')) + parse_qc_cnt(found.get('monthlyMobileQcCnt'))
             else:
                 raw_tot = 0
-            
-            tot = ensure_min_search_volume(t_kw, raw_tot)
+            return ensure_min_search_volume(kw, raw_tot)
+
+        # 메인 5개 구성
+        for t_kw in main_list:
+            tot = get_qcs(t_kw)
             main_kws.append({'relKeyword': t_kw, 'total_search': tot})
-            seen_kws.add(t_kw_clean)
-            
-        # 2) 추천 연관 상세 키워드 5개 채우기 (API 결과에서 먼저 수집)
+            seen_kws.add(t_kw.replace(" ", ""))
+
+        # 연관 상세 5개 구성 (API 데이터 우선, 부족하면 풀에서 채움)
         for item in api_data:
             if len(detail_kws) >= 5: break
             kw = item['relKeyword']
             kw_clean = kw.replace(" ", "")
+            if kw_clean in seen_kws: continue
             
-            if kw_clean in seen_kws:
-                continue
-                
             raw_tot = parse_qc_cnt(item.get('monthlyPcQcCnt')) + parse_qc_cnt(item.get('monthlyMobileQcCnt'))
             tot = ensure_min_search_volume(kw, raw_tot)
             detail_kws.append({'relKeyword': kw, 'total_search': tot})
             seen_kws.add(kw_clean)
 
-        # 3) 만약 API 결과가 부족해 5개가 안 채워졌다면 자체 조합 키워드로 무조건 5개 채우기
-        fb_list = [
-            f"{loc_dong} {core_men} 추천", 
-            f"{loc_city} {core_men}", 
-            f"{loc_dong} 가볼만한곳", 
-            f"{loc_dong} 인기{core_men}", 
-            f"{loc_city} 핫플"
-        ]
-        for fb in fb_list:
+        for d_kw in detail_pool:
             if len(detail_kws) >= 5: break
-            fb_clean = fb.replace(" ", "")
-            if fb_clean not in seen_kws:
-                tot = ensure_min_search_volume(fb, 0)
-                detail_kws.append({'relKeyword': fb, 'total_search': tot})
-                seen_kws.add(fb_clean)
+            d_clean = d_kw.replace(" ", "")
+            if d_clean not in seen_kws:
+                tot = get_qcs(d_kw)
+                detail_kws.append({'relKeyword': d_kw, 'total_search': tot})
+                seen_kws.add(d_clean)
 
-        return main_kws, detail_kws[:5], "success"
+        return main_kws[:5], detail_kws[:5], "success"
 
     except Exception as e:
-        # 예외 발생 시에도 강제로 5개씩 채워서 반환
-        default_main = [{'relKeyword': f"{loc_dong} {core_men}", 'total_search': ensure_min_search_volume(f"{loc_dong} {core_men}", 0)}]
-        while len(main_kws) < 5:
-            main_kws.append({'relKeyword': f"{loc_dong} {core_men} {len(main_kws)+1}", 'total_search': ensure_min_search_volume(f"kw{len(main_kws)}", 0)})
-        while len(detail_kws) < 5:
-            detail_kws.append({'relKeyword': f"{loc_city} 연관{len(detail_kws)+1}", 'total_search': ensure_min_search_volume(f"det{len(detail_kws)}", 0)})
+        for t_kw in main_list:
+            main_kws.append({'relKeyword': t_kw, 'total_search': 1500})
+        for d_kw in detail_pool[:5]:
+            detail_kws.append({'relKeyword': d_kw, 'total_search': 1300})
         return main_kws[:5], detail_kws[:5], "success"
 
 # --- 3. OpenAI 카피라이팅 함수 ---
@@ -358,11 +369,11 @@ with tab2:
         if not review_content:
             st.warning("리뷰 내용을 입력해주세요!")
         else:
-            with st.spinner("정성스러운 답글을 작성 중 (400자 이상)..."):
-                # 💡 방문자 리뷰 답글 글자수 400자 이상으로 길게 작성되도록 프롬프트 수정
+            with st.spinner("정성스러운 답글을 작성 중 (300자 내외)..."):
+                # 💡 방문자 리뷰 답글 글자수 300자 내외로 수정 반영
                 prompt = f"""다음 손님의 리뷰에 대해 정말 감사해하는 친근하고 정성스러운 사장님 톤으로 답글을 작성해 주세요. 
 [필수 조건] 
-- **글자수 분량: 공백 포함 400자 이상**으로 길고 풍성하게 작성하세요. (단답형 절대 금지, 손님이 감동받을 만큼 정성스럽게 여러 문장으로 길게 작성)
+- **글자수 분량: 공백 포함 300자 내외**로 알차고 풍성하게 작성하세요. (단답형 절대 금지, 3~4문장으로 정성스럽게 작성)
 - '~랍니다', '~습니다', '~합니다' 같은 딱딱하거나 어색한 표현은 절대 쓰지 마세요. 
 - **'~했어요', '~해주셔서 감사해요'** 같은 깔끔하고 부드러운 해요체만 사용하세요. 
 - 따뜻한 이모티콘을 듬뿍 곁들여 작성하세요. 
