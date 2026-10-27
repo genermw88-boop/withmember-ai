@@ -35,7 +35,6 @@ def parse_qc_cnt(val):
 def ensure_min_search_volume(kw_str, raw_count):
     if raw_count >= 1000:
         return raw_count
-    # 1,000건 미만 수치일 경우 고유 키워드 기반 1,200~2,800건 대 수치로 자연스럽게 보정
     seed = abs(hash(kw_str)) % 1600
     return 1200 + seed
 
@@ -63,7 +62,6 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
     core_men = men.split(",")[0].strip() if men else "추천"
     has_target = bool(target_kw_str and target_kw_str.strip())
     
-    # 음식점/외식업 키워드 포함 여부 판별
     food_keywords = ["맛집", "음식점", "식당", "술집", "주점", "카페", "베이커리", "디저트", "고기", "횟집", "치킨", "피자", "중식", "한식", "일식", "양식", "안주"]
     is_food = any(fk in men for fk in food_keywords)
     
@@ -71,7 +69,6 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
         raw_list = [k.strip() for k in target_kw_str.split(",") if k.strip()]
         target_list = list(dict.fromkeys(raw_list)) 
     else:
-        # 업종에 따라 타겟 키워드 목록 자동 분기 처리
         if is_food:
             target_list = [
                 f"{loc_dong} 맛집",
@@ -100,7 +97,6 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
         res = requests.get(f'https://api.naver.com{uri}', params=params, headers=headers)
         api_data = res.json().get('keywordList', []) if res.status_code == 200 else []
         
-        # 1) 메인 키워드 처리 (검색량 최소 1,000건 이상 보정)
         for t_kw in target_list:
             t_kw_clean = t_kw.replace(" ", "")
             found = next((item for item in api_data if item['relKeyword'].replace(" ", "") == t_kw_clean), None)
@@ -114,7 +110,6 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
             main_kws.append({'relKeyword': t_kw, 'total_search': tot})
             seen_kws.add(t_kw_clean)
             
-        # 2) 상세 연관 키워드 처리 (검색량 최소 1,000건 이상 보정)
         for item in api_data:
             if len(detail_kws) >= 5: break
             kw = item['relKeyword']
@@ -164,7 +159,7 @@ def generate_ai_content(prompt, api_key, system_role="", temp=0.7):
         return f"생성 실패: {str(e)}"
 
 # --- 4. Streamlit UI ---
-st.set_page_page_config = st.set_page_config(page_title="플레이스 최적화", layout="wide")
+st.set_page_config(page_title="플레이스 최적화", layout="wide")
 
 with st.sidebar:
     st.title("API 설정")
@@ -207,11 +202,10 @@ with tab1:
                     
                     used_targets = ", ".join([k['relKeyword'] for k in g_kws])
                     
-                    # 💡 변경 포인트 1: AI 말투를 딱딱한 ~습니다 체 대신 친근한 '해요체(~했어요, ~랍니다)'로 고정
                     system_role = f"""당신은 '{store}'을 운영하는 친근하고 다정한 사장님입니다.
 절대 AI나 로봇 같은 어투를 쓰지 말고, 블로그나 SNS에 글을 쓰듯 편안한 **'해요체' (~했어요, ~랍니다, ~거든요, ~러 오세요)**를 사용하세요. (~습니다, ~합니다 같은 다나까 체 절대 금지)
 문단마다 어울리는 친근한 이모티콘(✨, 💖, 👍, 🔥, 😊, 👏 등)을 듬뿍 사용하여 보기 좋게 작성하세요.
-각 문단 사이에는 엔터 두 번(\\n\\n)을 넣어 가독성을 높이세요."""
+각 문단 사이에는 엔터 두 번(\n\n)을 넣어 가독성을 높이세요."""
 
                     prompt = f"""
 [매장 정보]
@@ -264,6 +258,7 @@ with tab1:
                     gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #212529;'>🎯 {k['relKeyword']}</span> <span style='font-size: 14px; font-weight: 700; color: #007bff;'>(월 검색량: {k['total_search']:,}건)</span></li>" for k in g_kws])
                     detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #212529;'>✨ {k['relKeyword']}</span> <span style='font-size: 14px; font-weight: 600; color: #666;'>(월 검색량: {k['total_search']:,}건)</span></li>" for k in d_kws])
                     
+                    # 💡 수정 포인트: 자바스크립트 코드 내 중괄호({}) 충돌 방지를 위해 store 변수를 자바스크립트 상수로 따로 분리했습니다.
                     html_content = f"""
                     <!DOCTYPE html>
                     <html>
@@ -330,15 +325,16 @@ with tab1:
                         <button class="btn-down" onclick="downloadImage()">리포트 화면 이미지로 다운로드</button>
 
                         <script>
-                            function downloadImage() {
+                            function downloadImage() {{
+                                const storeName = "{store}";
                                 const element = document.getElementById('capture-area');
-                                html2canvas(element, { scale: 2, backgroundColor: "#ffffff" }).then(canvas => {
+                                html2canvas(element, {{ scale: 2, backgroundColor: "#ffffff" }}).then(canvas => {{
                                     let link = document.createElement('a');
-                                    link.download = '{store}_최적화리포트.png';
+                                    link.download = storeName + '_최적화리포트.png';
                                     link.href = canvas.toDataURL('image/png');
                                     link.click();
-                                });
-                            }
+                                }});
+                            }}
                         </script>
                     </body>
                     </html>
@@ -363,7 +359,6 @@ with tab2:
             st.warning("리뷰 내용을 입력해주세요!")
         else:
             with st.spinner("정성스러운 답글을 작성 중..."):
-                # 💡 변경 포인트 2: 리뷰 답글 프롬프트에도 '~했어요' 체를 쓰도록 명시
                 prompt = f"""다음 손님의 리뷰에 대해 정말 감사해하는 친근한 사장님 톤으로 답글을 작성해 주세요. 
 [필수 조건] 
 - 딱딱한 '~습니다' 체 대신, **'~했어요', '~해주셔서 감사해요', '~랍니다' 같은 부드러운 해요체**를 사용하세요. 
