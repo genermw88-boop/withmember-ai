@@ -216,12 +216,12 @@ with tab1:
 
 [SEO 및 문구 반영 조건]
 1. 타겟 키워드([{used_targets}]) 중 1~2개를 본문에 자연스럽게 포함시키세요.
-2. 매장 자랑거리나 이벤트 내용을 간결하게 녹여내세요.
+2. 매장 자랑거리나 이벤트 내용을 매력적으로 녹여내세요.
 
 [작성 가이드라인]
 1. [제목]과 [본문] 형식으로 출력하세요.
-2. [제목]: 시선을 사로잡는 간결하고 매력적인 제목 (이모티콘 포함)
-3. **[본문 분량]: 공백 포함 200자 ~ 300자 내외 (매우 중요! 3~4문장 분량으로 알차게 작성)**
+2. [제목]: 시선을 사로잡는 매력적인 제목 (이모티콘 포함)
+3. **[본문 분량]: 공백 포함 400자 내외 (매우 중요! 2개 문단으로 나누어 알차고 풍성하게 작성)**
 4. **어투 엄수**: '~했어요', '~해주세요', '~보세요' 같은 깔끔한 해요체만 사용하세요. ('~랍니다', '~습니다', '~합니다' 절대 금지)
 5. 해시태그(#) 절대 금지.
 """
@@ -248,7 +248,6 @@ with tab1:
                     gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #212529;'>🎯 {k['relKeyword']}</span> <span style='font-size: 14px; font-weight: 700; color: #007bff;'>(월 검색량: {k['total_search']:,}건)</span></li>" for k in g_kws])
                     detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #212529;'>✨ {k['relKeyword']}</span> <span style='font-size: 14px; font-weight: 600; color: #666;'>(월 검색량: {k['total_search']:,}건)</span></li>" for k in d_kws])
                     
-                    # 💡 파이썬 f-string 중괄호 충돌 방지를 위해 자바스크립트 영역의 {store}를 일반 문자열 결합(+)으로 수정 완료
                     html_content = f"""
                     <!DOCTYPE html>
                     <html>
@@ -307,7 +306,7 @@ with tab1:
                             </div>
                             
                             <div class="intro-section">
-                                <h3>최적화 새소식 문구 (200자~300자 내외)</h3>
+                                <h3>최적화 새소식 문구 (400자 내외)</h3>
                                 <div class="intro-box">{intro_html}</div>
                             </div>
                         </div>
