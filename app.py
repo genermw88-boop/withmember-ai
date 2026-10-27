@@ -164,7 +164,7 @@ def generate_ai_content(prompt, api_key, system_role="", temp=0.7):
         return f"생성 실패: {str(e)}"
 
 # --- 4. Streamlit UI ---
-st.set_page_config(page_title="플레이스 최적화", layout="wide")
+st.set_page_page_config = st.set_page_config(page_title="플레이스 최적화", layout="wide")
 
 with st.sidebar:
     st.title("API 설정")
@@ -207,8 +207,9 @@ with tab1:
                     
                     used_targets = ", ".join([k['relKeyword'] for k in g_kws])
                     
-                    system_role = f"""당신은 '{store}'을 직접 운영하는 친절하고 센스 있는 사장님입니다.
-로봇 같은 어투를 절대 쓰지 마세요.
+                    # 💡 변경 포인트 1: AI 말투를 딱딱한 ~습니다 체 대신 친근한 '해요체(~했어요, ~랍니다)'로 고정
+                    system_role = f"""당신은 '{store}'을 운영하는 친근하고 다정한 사장님입니다.
+절대 AI나 로봇 같은 어투를 쓰지 말고, 블로그나 SNS에 글을 쓰듯 편안한 **'해요체' (~했어요, ~랍니다, ~거든요, ~러 오세요)**를 사용하세요. (~습니다, ~합니다 같은 다나까 체 절대 금지)
 문단마다 어울리는 친근한 이모티콘(✨, 💖, 👍, 🔥, 😊, 👏 등)을 듬뿍 사용하여 보기 좋게 작성하세요.
 각 문단 사이에는 엔터 두 번(\\n\\n)을 넣어 가독성을 높이세요."""
 
@@ -233,11 +234,12 @@ with tab1:
 2. [제목]: 시선을 사로잡는 매력적인 제목 (이모티콘 포함)
 3. [본문 분량]: 공백 포함 500자 ~ 800자 사이
 4. [본문 구성 - 4개 문단 필수]:
-   - 1문단: 손님들께 보내는 따뜻한 안부 인사와 매장/업종 소개 💛 (2~3문장)
-   - 2문단: 주요 메뉴/서비스와 함께 입력된 매장 자랑거리를 매력적이고 방문 욕구가 생기도록 어필 🔥 (4~5문장 이상)
-   - 3문단: {'이벤트 소식을 안내하며 방문 독려' if has_event else '편안하게 방문하여 힐링할 수 있는 공간임을 어필'} ✨ (3~4문장)
-   - 4문단: 진심 어린 사장님의 맺음말과 초대 인사 👏 (2~3문장)
-5. 절대 주의사항: 부정적인 표현 금지, 해시태그(#) 절대 금지.
+   - 1문단: 손님들께 보내는 따뜻한 안부 인사와 매장/업종 소개 💛 (~했어요, ~랍니다 어조 필수)
+   - 2문단: 주요 메뉴/서비스와 함께 입력된 매장 자랑거리를 매력적이고 방문 욕구가 생기도록 어필 🔥
+   - 3문단: {'이벤트 소식을 안내하며 방문 독려' if has_event else '편안하게 방문하여 힐링할 수 있는 공간임을 어필'} ✨
+   - 4문단: 진심 어린 사장님의 맺음말과 초대 인사 👏
+5. **어투 엄수**: 모든 문장은 반드시 '~했어요', '~랍니다', '~거든요', '~보세요' 같은 **해요체**로만 끝내세요. 절대 '~습니다'나 '~합니다'를 쓰지 마세요.
+6. 절대 주의사항: 부정적인 표현 금지, 해시태그(#) 절대 금지.
 """
                     
                     intro_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role)
@@ -328,15 +330,15 @@ with tab1:
                         <button class="btn-down" onclick="downloadImage()">리포트 화면 이미지로 다운로드</button>
 
                         <script>
-                            function downloadImage() {{
+                            function downloadImage() {
                                 const element = document.getElementById('capture-area');
-                                html2canvas(element, {{ scale: 2, backgroundColor: "#ffffff" }}).then(canvas => {{
+                                html2canvas(element, { scale: 2, backgroundColor: "#ffffff" }).then(canvas => {
                                     let link = document.createElement('a');
                                     link.download = '{store}_최적화리포트.png';
                                     link.href = canvas.toDataURL('image/png');
                                     link.click();
-                                }});
-                            }}
+                                });
+                            }
                         </script>
                     </body>
                     </html>
@@ -361,7 +363,17 @@ with tab2:
             st.warning("리뷰 내용을 입력해주세요!")
         else:
             with st.spinner("정성스러운 답글을 작성 중..."):
-                prompt = f"다음 손님의 리뷰에 대해 친절하고 감사해하는 사장님 톤으로 답글을 작성해 주세요. [필수 조건] 단답형을 피하고 반드시 정중한 '존댓말'을 사용하여 작성하세요. 친근한 이모티콘 듬뿍 써주세요. [절대 금지] 글 마지막에 해시태그(#)를 달거나 키워드를 따로 나열하지 마세요. 오직 답글 본문만 작성하세요. 리뷰내용: {review_content}"
+                # 💡 변경 포인트 2: 리뷰 답글 프롬프트에도 '~했어요' 체를 쓰도록 명시
+                prompt = f"""다음 손님의 리뷰에 대해 정말 감사해하는 친근한 사장님 톤으로 답글을 작성해 주세요. 
+[필수 조건] 
+- 딱딱한 '~습니다' 체 대신, **'~했어요', '~해주셔서 감사해요', '~랍니다' 같은 부드러운 해요체**를 사용하세요. 
+- 단답형을 피하고 정성스럽게 작성하되, 친근한 이모티콘을 듬뿍 써주세요. 
+[절대 금지] 
+- 글 마지막에 해시태그(#)를 달거나 키워드를 따로 나열하지 마세요. 
+- 오직 답글 본문만 작성하세요. 
+
+리뷰내용: {review_content}"""
+                
                 review_res = generate_ai_content(prompt, O_API_KEY)
                 st.success("작성된 답글:")
                 st.write(review_res)
