@@ -203,8 +203,8 @@ with tab1:
                     used_targets = ", ".join([k['relKeyword'] for k in g_kws])
                     
                     system_role = f"""당신은 '{store}'을 운영하는 친근한 사장님입니다.
-로봇 같은 어투나 '~답니다', '~습니다' 같은 딱딱하고 어색한 표현을 절대 쓰지 마세요.
-오직 자연스러운 해요체(~했어요, ~해주세요, ~보세요)만 사용하고, 핵심만 깔끔하게 전달하세요."""
+로봇 같은 어투나 '~랍니다', '~습니다', '~합니다' 같은 딱딱하고 어색한 표현을 절대 쓰지 마세요.
+오직 자연스러운 해요체(~했어요, ~해주세요, ~보세요)만 사용하세요."""
 
                     prompt = f"""
 [매장 정보]
@@ -221,8 +221,8 @@ with tab1:
 [작성 가이드라인]
 1. [제목]과 [본문] 형식으로 출력하세요.
 2. [제목]: 시선을 사로잡는 간결하고 매력적인 제목 (이모티콘 포함)
-3. **[본문 분량]: 공백 포함 100자 내외 (매우 중요! 짧고 임팩트 있게 2~3문장 이내로 작성)**
-4. **어투 엄수**: '~했어요', '~해주세요', '~보세요' 같은 깔끔한 해요체만 사용하세요. ('~답니다', '~습니다', '~합니다' 절대 금지)
+3. **[본문 분량]: 공백 포함 200자 ~ 300자 내외 (매우 중요! 3~4문장 분량으로 알차게 작성)**
+4. **어투 엄수**: '~했어요', '~해주세요', '~보세요' 같은 깔끔한 해요체만 사용하세요. ('~랍니다', '~습니다', '~합니다' 절대 금지)
 5. 해시태그(#) 절대 금지.
 """
                     
@@ -248,6 +248,7 @@ with tab1:
                     gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #212529;'>🎯 {k['relKeyword']}</span> <span style='font-size: 14px; font-weight: 700; color: #007bff;'>(월 검색량: {k['total_search']:,}건)</span></li>" for k in g_kws])
                     detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #212529;'>✨ {k['relKeyword']}</span> <span style='font-size: 14px; font-weight: 600; color: #666;'>(월 검색량: {k['total_search']:,}건)</span></li>" for k in d_kws])
                     
+                    # 💡 파이썬 f-string 중괄호 충돌 방지를 위해 자바스크립트 영역의 {store}를 일반 문자열 결합(+)으로 수정 완료
                     html_content = f"""
                     <!DOCTYPE html>
                     <html>
@@ -306,7 +307,7 @@ with tab1:
                             </div>
                             
                             <div class="intro-section">
-                                <h3>최적화 새소식 문구 (100자 내외)</h3>
+                                <h3>최적화 새소식 문구 (200자~300자 내외)</h3>
                                 <div class="intro-box">{intro_html}</div>
                             </div>
                         </div>
@@ -314,16 +315,16 @@ with tab1:
                         <button class="btn-down" onclick="downloadImage()">리포트 화면 이미지로 다운로드</button>
 
                         <script>
-                            function downloadImage() {
+                            function downloadImage() {{
                                 const storeName = "{store}";
                                 const element = document.getElementById('capture-area');
-                                html2canvas(element, { scale: 2, backgroundColor: "#ffffff" }).then(canvas => {
+                                html2canvas(element, {{ scale: 2, backgroundColor: "#ffffff" }}).then(canvas => {{
                                     let link = document.createElement('a');
                                     link.download = storeName + '_최적화리포트.png';
                                     link.href = canvas.toDataURL('image/png');
                                     link.click();
-                                });
-                            }
+                                }});
+                            }}
                         </script>
                     </body>
                     </html>
