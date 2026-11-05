@@ -270,6 +270,7 @@ with tab1:
                     gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #212529;'>🎯 {k['relKeyword']}</span> <span style='font-size: 14px; font-weight: 700; color: #007bff;'>(월 검색량: {k['total_search']:,}건)</span></li>" for k in g_kws])
                     detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #212529;'>✨ {k['relKeyword']}</span> <span style='font-size: 14px; font-weight: 600; color: #666;'>(월 검색량: {k['total_search']:,}건)</span></li>" for k in d_kws])
                     
+                    # HTML 내부의 CSS/JS 중괄호 충돌을 방지하기 위해 중괄호들을 {{ 또는 }}로 이스케이프 처리함
                     html_content = f"""
                     <!DOCTYPE html>
                     <html>
@@ -336,16 +337,16 @@ with tab1:
                         <button class="btn-down" onclick="downloadImage()">리포트 화면 이미지로 다운로드</button>
 
                         <script>
-                            function downloadImage() {
+                            function downloadImage() {{
                                 const storeName = "{store}";
                                 const element = document.getElementById('capture-area');
-                                html2canvas(element, { scale: 2, backgroundColor: "#ffffff" }).then(canvas => {
+                                html2canvas(element, {{ scale: 2, backgroundColor: "#ffffff" }}).then(canvas => {{
                                     let link = document.createElement('a');
                                     link.download = storeName + '_최적화리포트.png';
                                     link.href = canvas.toDataURL('image/png');
                                     link.click();
-                                });
-                            }
+                                }});
+                            }}
                         </script>
                     </body>
                     </html>
@@ -370,7 +371,6 @@ with tab2:
             st.warning("리뷰 내용을 입력해주세요!")
         else:
             with st.spinner("정성스러운 답글을 작성 중 (300자 내외)..."):
-                # 수정된 자연스럽고 친근한 대화형 프롬프트 적용
                 review_system_role = "당신은 매장을 직접 운영하며 손님들과 친근하게 소통하는 다정하고 센스 있는 사장님입니다. 로봇처럼 기계적인 문구나 템플릿 느낌을 완전히 배제하고, 실제 카카오톡 메시지나 친한 지인에게 대하듯 부드럽고 자연스럽게 문장을 이어씁니다."
                 
                 prompt = f"""
