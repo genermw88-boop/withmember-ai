@@ -225,7 +225,6 @@ with tab1:
 손님들에게 대표가 직접 소통하듯 따뜻하고 진정성 있는 톤으로 작성하세요.
 로봇 같은 어투나 '~답니다', '~습니다', '~합니다' 같은 딱딱한 표현은 지양하고, 편안한 해요체(~했어요, ~해주세요, ~해드릴게요)만 사용하세요."""
 
-                    # 💡 '저희 + 매장명' 형태로 직접 자연스럽게 소개하도록 지침 수정
                     prompt = f"""
 [매장 정보]
 - 매장명: '{store}'
@@ -337,16 +336,16 @@ with tab1:
                         <button class="btn-down" onclick="downloadImage()">리포트 화면 이미지로 다운로드</button>
 
                         <script>
-                            function downloadImage() {{
+                            function downloadImage() {
                                 const storeName = "{store}";
                                 const element = document.getElementById('capture-area');
-                                html2canvas(element, {{ scale: 2, backgroundColor: "#ffffff" }}).then(canvas => {{
+                                html2canvas(element, { scale: 2, backgroundColor: "#ffffff" }).then(canvas => {
                                     let link = document.createElement('a');
                                     link.download = storeName + '_최적화리포트.png';
                                     link.href = canvas.toDataURL('image/png');
                                     link.click();
-                                }});
-                            }}
+                                });
+                            }
                         </script>
                     </body>
                     </html>
@@ -363,7 +362,7 @@ with tab1:
 with tab2:
     st.header("방문자 리뷰 답글 생성기")
     with st.form("review_form"):
-        review_content = st.text_area("손님이 남긴 리뷰 내용을 입력하세요")
+        review_content = st.text_area("손님이 남긴 리뷰 내용을 입력하세요", placeholder="예: 음식도 너무 맛있고 직원분들이 친절해서 기분 좋게 잘 먹고 갑니다!")
         submit_review = st.form_submit_button("답글 생성")
     
     if submit_review:
@@ -371,25 +370,26 @@ with tab2:
             st.warning("리뷰 내용을 입력해주세요!")
         else:
             with st.spinner("정성스러운 답글을 작성 중 (300자 내외)..."):
-                prompt = f"""당신은 매장을 직접 운영하며 손님 한 분 한 분을 소중히 대하는 대표입니다. 
-손님이 남긴 아래 리뷰에 대해 친절하고 따뜻한 대표님의 톤으로 자연스러운 답글을 작성해 주세요.
-
+                # 수정된 자연스럽고 친근한 대화형 프롬프트 적용
+                review_system_role = "당신은 매장을 직접 운영하며 손님들과 친근하게 소통하는 다정하고 센스 있는 사장님입니다. 로봇처럼 기계적인 문구나 템플릿 느낌을 완전히 배제하고, 실제 카카오톡 메시지나 친한 지인에게 대하듯 부드럽고 자연스럽게 문장을 이어씁니다."
+                
+                prompt = f"""
 [손님이 남긴 리뷰 내용]
 "{review_content}"
 
-[필수 반영 조건]
-1. 답글의 맨 첫 문장은 무조건 토씨 하나 안 틀리고 **"안녕하세요 저희 매장을 방문해주셔서 감사합니다 😊"** 로 시작하세요.
-2. 손님의 리뷰 언급 포인트(음식 맛, 서비스, 분위기 등)에 맞춰 실제 대표가 정성스럽게 답글을 남기듯 따뜻하고 진정성 있게 반응해 주세요. (손님 말투를 단순 복사하는 것이 아님)
-3. **전체 글자수 분량: 공백 포함 300자 내외**로 알차고 풍성하게 작성하세요.
-4. '~랍니다', '~습니다', '~합니다' 같은 딱딱하거나 어색한 표현은 쓰지 말고, **'~했어요', '~해주셔서 감사해요', '~올게요'** 같은 깔끔하고 부드러운 해요체만 사용하세요.
-5. 이모티콘은 전체 문맥에 어울리게 1~2개 정도 적절히 곁들여 작성하세요.
+[답글 작성 가이드라인 (중요)]
+1. **첫 문장 고정 해제 및 자연스러운 흐름**: "안녕하세요 저희 매장을..." 처럼 기계적이고 템플릿 같은 첫 문장 사용을 절대 금지합니다. 손님이 언급한 구체적인 내용(예: 특정 음식, 분위기, 친절함 등)에 맞추어 첫 마디부터 자연스럽고 반갑게 반응해 주세요. (예: "와, 정말 기분 좋은 리뷰네요!", "오늘 방문해주시고 이렇게 예쁜 후기까지 남겨주시다니 정말 감사드려요! 😊" 등 매번 유연하게 시작)
+2. **문장과 문장의 자연스러운 연결**: 각 문장이 딱딱하게 끊기지 않고, 사장님이 평소 카톡이나 친근한 메시지를 쓰듯 흐름이 부드럽게 이어지도록 작성하세요.
+3. **분량**: 공백 포함 **300자 내외**로 너무 짧지 않고 알차게 작성하세요.
+4. **어투 엄수**: '~랍니다', '~습니다', '~합니다' 같은 딱딱한 어미는 절대 쓰지 말고, **'~했어요', '~해주셔서 감사해요', '~될 것 같아요', '~보러 오세요'** 같은 편안한 해요체만 사용하세요.
+5. **이모티콘**: 전체 톤에 어울리게 1~2개 정도 자연스럽게 곁들이세요.
 
-[절대 금지] 
-- 글 마지막에 해시태그(#)나 키워드 나열 금지. 
-- 오직 답글 본문만 작성하세요. 
+[절대 금지]
+- 해시태그(#)나 키워드 나열 절대 금지.
+- 오직 답글 본문만 출력하세요.
 """
                 
-                review_res = generate_ai_content(prompt, O_API_KEY, temp=0.7)
+                review_res = generate_ai_content(prompt, O_API_KEY, system_role=review_system_role, temp=0.8)
                 st.success("작성된 답글:")
                 st.write(review_res)
                 st.code(review_res)
