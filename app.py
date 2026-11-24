@@ -17,19 +17,22 @@ except Exception:
     st.error("API 키 설정이 필요합니다.")
     st.stop()
 
+
 def generate_signature(timestamp, method, uri, secret_key):
     message = f"{timestamp}.{method}.{uri}"
-    hash_mac = hmac.new(secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
-    return base64.b64encode(hash_mac.digest()).decode('utf-8')
+    hash_mac = hmac.new(secret_key.encode("utf-8"), message.encode("utf-8"), hashlib.sha256)
+    return base64.b64encode(hash_mac.digest()).decode("utf-8")
+
 
 def parse_qc_cnt(val):
     if isinstance(val, str):
-        val = val.replace('< ', '').replace('<', '').replace(',', '').strip()
+        val = val.replace("< ", "").replace("<", "").replace(",", "").strip()
         try:
             return int(val)
-        except:
+        except Exception:
             return 10
     return int(val) if val else 0
+
 
 # 검색량 1,000건 이상 보정 함수
 def ensure_min_search_volume(kw_str, raw_count):
@@ -38,34 +41,38 @@ def ensure_min_search_volume(kw_str, raw_count):
     seed = abs(hash(kw_str)) % 1600
     return 1200 + seed
 
+
 # --- 2. 네이버 키워드 및 검색량 추출 ENGINE (무조건 각 5개씩 보장) ---
 def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key):
-    uri = '/keywordstool'
-    method = 'GET'
+    uri = "/keywordstool"
+    method = "GET"
     timestamp = str(round(time.time() * 1000))
     signature = generate_signature(timestamp, method, uri, s_key)
     headers = {
-        'Content-Type': 'application/json; charset=UTF-8',
-        'X-Timestamp': timestamp,
-        'X-API-KEY': a_key,
-        'X-Customer': str(c_id),
-        'X-Signature': signature
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-Timestamp": timestamp,
+        "X-API-KEY": a_key,
+        "X-Customer": str(c_id),
+        "X-Signature": signature,
     }
-    
+
     reg_parts = [p.strip() for p in reg.strip().split()]
     loc_dong = reg_parts[-1] if reg_parts else reg
     loc_city = reg_parts[-2] if len(reg_parts) > 1 else loc_dong
-    
+
     core_men = men.split(",")[0].strip() if men else "추천"
     has_target = bool(target_kw_str and target_kw_str.strip())
-    
-    food_keywords = ["맛집", "음식점", "식당", "술집", "주점", "카페", "베이커리", "디저트", "고기", "횟집", "치킨", "피자", "중식", "한식", "일식", "양식", "안주"]
+
+    food_keywords = [
+        "맛집", "음식점", "식당", "술집", "주점", "카페", "베이커리",
+        "디저트", "고기", "횟집", "치킨", "피자", "중식", "한식", "일식", "양식", "안주",
+    ]
     is_food = any(fk in men for fk in food_keywords)
-    
+
     # 1) 대표(메인) 키워드 5개 강제 생성
     if has_target:
         raw_list = [k.strip() for k in target_kw_str.split(",") if k.strip()]
-        main_list = list(dict.fromkeys(raw_list)) 
+        main_list = list(dict.fromkeys(raw_list))
     else:
         if is_food:
             main_list = [
@@ -73,7 +80,7 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
                 f"{loc_dong} {core_men}",
                 f"{loc_city} 맛집",
                 f"{loc_dong} 가볼만한곳",
-                f"{loc_dong} 핫플"
+                f"{loc_dong} 핫플",
             ]
         else:
             main_list = [
@@ -81,9 +88,9 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
                 f"{loc_city} {core_men}",
                 f"{loc_dong} {core_men} 추천",
                 f"{loc_dong} 가볼만한곳",
-                f"{loc_city} {core_men} 추천"
+                f"{loc_city} {core_men} 추천",
             ]
-    
+
     while len(main_list) < 5:
         main_list.append(f"{loc_dong} {core_men} 전문")
     main_list = main_list[:5]
@@ -96,7 +103,7 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
             f"{loc_dong} 모임장소",
             f"{loc_dong} 데이트코스",
             f"{loc_city} 가볼만한곳",
-            f"{loc_dong} 술집"
+            f"{loc_dong} 술집",
         ]
     else:
         detail_pool = [
@@ -105,88 +112,107 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
             f"{loc_dong} 전문점",
             f"{loc_city} 핫플",
             f"{loc_dong} 인기{core_men}",
-            f"{loc_city} 추천"
+            f"{loc_city} 추천",
         ]
 
     hint_kws_param = ",".join([k.replace(" ", "") for k in main_list + detail_pool[:3]])
-    params = {'hintKeywords': hint_kws_param, 'showDetail': 1}
-    
+    params = {"hintKeywords": hint_kws_param, "showDetail": 1}
+
     main_kws = []
     detail_kws = []
     seen_kws = set()
-    
+
     try:
-        res = requests.get(f'https://api.naver.com{uri}', params=params, headers=headers)
-        api_data = res.json().get('keywordList', []) if res.status_code == 200 else []
-        
+        res = requests.get(f"https://api.naver.com{uri}", params=params, headers=headers)
+        api_data = res.json().get("keywordList", []) if res.status_code == 200 else []
+
         def get_qcs(kw):
             kw_clean = kw.replace(" ", "")
-            found = next((item for item in api_data if item['relKeyword'].replace(" ", "") == kw_clean), None)
+            found = next(
+                (item for item in api_data if item["relKeyword"].replace(" ", "") == kw_clean),
+                None,
+            )
             if found:
-                raw_tot = parse_qc_cnt(found.get('monthlyPcQcCnt')) + parse_qc_cnt(found.get('monthlyMobileQcCnt'))
+                raw_tot = parse_qc_cnt(found.get("monthlyPcQcCnt")) + parse_qc_cnt(
+                    found.get("monthlyMobileQcCnt")
+                )
             else:
                 raw_tot = 0
             return ensure_min_search_volume(kw, raw_tot)
 
         for t_kw in main_list:
             tot = get_qcs(t_kw)
-            main_kws.append({'relKeyword': t_kw, 'total_search': tot})
+            main_kws.append({"relKeyword": t_kw, "total_search": tot})
             seen_kws.add(t_kw.replace(" ", ""))
 
         for item in api_data:
-            if len(detail_kws) >= 5: break
-            kw = item['relKeyword']
+            if len(detail_kws) >= 5:
+                break
+            kw = item["relKeyword"]
             kw_clean = kw.replace(" ", "")
-            if kw_clean in seen_kws: continue
-            
-            raw_tot = parse_qc_cnt(item.get('monthlyPcQcCnt')) + parse_qc_cnt(item.get('monthlyMobileQcCnt'))
+            if kw_clean in seen_kws:
+                continue
+
+            raw_tot = parse_qc_cnt(item.get("monthlyPcQcCnt")) + parse_qc_cnt(
+                item.get("monthlyMobileQcCnt")
+            )
             tot = ensure_min_search_volume(kw, raw_tot)
-            detail_kws.append({'relKeyword': kw, 'total_search': tot})
+            detail_kws.append({"relKeyword": kw, "total_search": tot})
             seen_kws.add(kw_clean)
 
         for d_kw in detail_pool:
-            if len(detail_kws) >= 5: break
+            if len(detail_kws) >= 5:
+                break
             d_clean = d_kw.replace(" ", "")
             if d_clean not in seen_kws:
                 tot = get_qcs(d_kw)
-                detail_kws.append({'relKeyword': d_kw, 'total_search': tot})
+                detail_kws.append({"relKeyword": d_kw, "total_search": tot})
                 seen_kws.add(d_clean)
 
         return main_kws[:5], detail_kws[:5], "success"
 
-    except Exception as e:
+    except Exception:
         for t_kw in main_list:
-            main_kws.append({'relKeyword': t_kw, 'total_search': 1500})
+            main_kws.append({"relKeyword": t_kw, "total_search": 1500})
         for d_kw in detail_pool[:5]:
-            detail_kws.append({'relKeyword': d_kw, 'total_search': 1300})
+            detail_kws.append({"relKeyword": d_kw, "total_search": 1300})
         return main_kws[:5], detail_kws[:5], "success"
+
 
 # --- 3. OpenAI 카피라이팅 함수 ---
 def generate_ai_content(prompt, api_key, system_role="", temp=0.7):
+    if not api_key:
+        return "생성 실패: OpenAI API 키가 설정되지 않았습니다."
     try:
         client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_role},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
-            temperature=temp
+            temperature=temp,
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
         return f"생성 실패: {str(e)}"
 
+
 # --- 4. Streamlit UI ---
 st.set_page_config(page_title="플레이스 최적화", layout="wide")
+
+if "review_reply" not in st.session_state:
+    st.session_state["review_reply"] = ""
+if "review_warning" not in st.session_state:
+    st.session_state["review_warning"] = ""
 
 with st.sidebar:
     st.title("API 설정")
     if not (N_API_KEY and N_SECRET_KEY and O_API_KEY):
         st.warning("Secrets를 설정하거나 직접 입력하세요.")
-        N_API_KEY = st.text_input("Naver API KEY", type="password")
-        N_SECRET_KEY = st.text_input("Naver SECRET KEY", type="password")
-        O_API_KEY = st.text_input("OpenAI API KEY", type="password")
+        N_API_KEY = st.text_input("Naver API KEY", type="password", key="sb_naver_api")
+        N_SECRET_KEY = st.text_input("Naver SECRET KEY", type="password", key="sb_naver_secret")
+        O_API_KEY = st.text_input("OpenAI API KEY", type="password", key="sb_openai_api")
     else:
         st.success("API 연결 완료! 자동 모드")
 
@@ -197,30 +223,52 @@ tab1, tab2 = st.tabs(["키워드 & 새소식 문구", "방문자 리뷰 답글"]
 with tab1:
     with st.form("intro_form"):
         r1_c1, r1_c2, r1_c3 = st.columns(3)
-        with r1_c1: store = st.text_input("매장명", placeholder="예: 하단끝집 마산경남대점, 헤어살롱 라온")
-        with r1_c2: reg = st.text_input("지역 (시/구/동 모두 입력)", placeholder="예: 경남 창원시 마산합포구 해운동")
-        with r1_c3: men = st.text_input("메뉴/업종", placeholder="예: 미용실, 헬스장, 안주맛집, 닭다리살")
-        
+        with r1_c1:
+            store = st.text_input(
+                "매장명", placeholder="예: 하단끝집 마산경남대점, 헤어살롱 라온"
+            )
+        with r1_c2:
+            reg = st.text_input(
+                "지역 (시/구/동 모두 입력)", placeholder="예: 경남 창원시 마산합포구 해운동"
+            )
+        with r1_c3:
+            men = st.text_input(
+                "메뉴/업종", placeholder="예: 미용실, 헬스장, 안주맛집, 닭다리살"
+            )
+
         r2_c1, r2_c2, r2_c3 = st.columns(3)
-        with r2_c1: target_kws = st.text_input("타겟 키워드 (선택 입력, 쉼표 구분)", placeholder="예: 창원 미용실, 해운동 미용실")
-        with r2_c2: merit = st.text_input("매장만의 자랑거리 (선택)", placeholder="예: 1:1 맞춤 헤어 컨설팅 및 최고급 프리미엄 제품 사용")
-        with r2_c3: event = st.text_input("이벤트 (선택)", placeholder="예: 첫 방문 고객 20% 할인 이벤트")
-            
+        with r2_c1:
+            target_kws = st.text_input(
+                "타겟 키워드 (선택 입력, 쉼표 구분)",
+                placeholder="예: 창원 미용실, 해운동 미용실",
+            )
+        with r2_c2:
+            merit = st.text_input(
+                "매장만의 자랑거리 (선택)",
+                placeholder="예: 1:1 맞춤 헤어 컨설팅 및 최고급 프리미엄 제품 사용",
+            )
+        with r2_c3:
+            event = st.text_input(
+                "이벤트 (선택)", placeholder="예: 첫 방문 고객 20% 할인 이벤트"
+            )
+
         submit_intro = st.form_submit_button("최적화 실행")
-    
+
     if submit_intro:
         if not store or not reg or not men:
             st.error("매장명, 지역, 메뉴/업종은 필수 입력 항목입니다!")
         else:
             with st.spinner("지역 기반 정확도 높은 키워드 검색 및 문구 작성 중..."):
-                g_kws, d_kws, msg = get_naver_target_keywords(target_kws, store, reg, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY)
-                
+                g_kws, d_kws, msg = get_naver_target_keywords(
+                    target_kws, store, reg, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY
+                )
+
                 if msg == "success":
                     has_event = bool(event and event.strip())
                     has_merit = bool(merit and merit.strip())
-                    
-                    used_targets = ", ".join([k['relKeyword'] for k in g_kws])
-                    
+
+                    used_targets = ", ".join([k["relKeyword"] for k in g_kws])
+
                     system_role = f"""당신은 '{store}'을 직접 운영하는 다정하고 친근한 매장 대표(사장님)입니다.
 손님들에게 대표가 직접 소통하듯 따뜻하고 진정성 있는 톤으로 작성하세요.
 로봇 같은 어투나 '~답니다', '~습니다', '~합니다' 같은 딱딱한 표현은 지양하고, 편안한 해요체(~했어요, ~해주세요, ~해드릴게요)만 사용하세요."""
@@ -247,29 +295,53 @@ with tab1:
 5. **어투 엄수**: 대표님이 직접 말하듯 '~했어요', '~해주세요', '~보세요', '~해드릴게요' 같은 깔끔한 해요체만 사용하세요. ('~랍니다', '~습니다', '~합니다' 절대 금지)
 6. 해시태그(#) 절대 금지.
 """
-                    
-                    intro_res = generate_ai_content(prompt, O_API_KEY, system_role=system_role)
-                    
+
+                    intro_res = generate_ai_content(
+                        prompt, O_API_KEY, system_role=system_role
+                    )
+
                     if "[제목]" in intro_res and "[본문]" in intro_res:
                         parts = intro_res.split("[본문]")
                         title_part = parts[0].replace("[제목]", "").strip()
                         body_part = parts[1].strip()
-                        body_html = body_part.replace('\n\n', '<br><br>').replace('\n', '<br>')
-                        intro_html = f"<h4 style='color: #007bff; margin-top: 0; margin-bottom: 15px; font-size: 18px;'>{title_part}</h4><div style='border-top: 1px dashed #dee2e6; margin-bottom: 15px;'></div><div style='line-height: 1.8; font-size: 15px;'>{body_html}</div>"
+                        body_html = body_part.replace("\n\n", "<br><br>").replace("\n", "<br>")
+                        intro_html = (
+                            f"<h4 style='color: #007bff; margin-top: 0; margin-bottom: 15px; font-size: 18px;'>{title_part}</h4>"
+                            f"<div style='border-top: 1px dashed #dee2e6; margin-bottom: 15px;'></div>"
+                            f"<div style='line-height: 1.8; font-size: 15px;'>{body_html}</div>"
+                        )
                     else:
-                        intro_html = intro_res.replace('\n\n', '<br><br>').replace('\n', '<br>')
+                        intro_html = intro_res.replace("\n\n", "<br><br>").replace("\n", "<br>")
 
                     display_event = event if event else "없음"
                     display_merit = merit if merit else "없음"
                     display_target = target_kws if target_kws else "네이버 자동 추출"
-                    
+
                     st.divider()
-                    
-                    box_title_left = "타겟 키워드 월간 검색량" if target_kws else "네이버 대표 키워드 검색량"
-                    
-                    gold_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #212529;'>🎯 {k['relKeyword']}</span> <span style='font-size: 14px; font-weight: 700; color: #007bff;'>(월 검색량: {k['total_search']:,}건)</span></li>" for k in g_kws])
-                    detail_li = "".join([f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'><span style='font-size: 15px; font-weight: 700; color: #212529;'>✨ {k['relKeyword']}</span> <span style='font-size: 14px; font-weight: 600; color: #666;'>(월 검색량: {k['total_search']:,}건)</span></li>" for k in d_kws])
-                    
+
+                    box_title_left = (
+                        "타겟 키워드 월간 검색량"
+                        if target_kws
+                        else "네이버 대표 키워드 검색량"
+                    )
+
+                    gold_li = "".join(
+                        [
+                            f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'>"
+                            f"<span style='font-size: 15px; font-weight: 700; color: #212529;'>🎯 {k['relKeyword']}</span>"
+                            f"<span style='font-size: 14px; font-weight: 700; color: #007bff;'>(월 검색량: {k['total_search']:,}건)</span></li>"
+                            for k in g_kws
+                        ]
+                    )
+                    detail_li = "".join(
+                        [
+                            f"<li style='padding: 12px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: center;'>"
+                            f"<span style='font-size: 15px; font-weight: 700; color: #212529;'>✨ {k['relKeyword']}</span>"
+                            f"<span style='font-size: 14px; font-weight: 600; color: #666;'>(월 검색량: {k['total_search']:,}건)</span></li>"
+                            for k in d_kws
+                        ]
+                    )
+
                     html_content = f"""
                     <!DOCTYPE html>
                     <html>
@@ -279,24 +351,24 @@ with tab1:
                             @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
                             body {{ font-family: 'Pretendard', sans-serif; background-color: #ffffff; margin: 0; padding: 0; }}
                             .report-box {{ width: 100%; max-width: 800px; padding: 25px; background: #ffffff; box-sizing: border-box; }}
-                            
+
                             .header-title {{ border-bottom: 1px solid #ddd; padding-bottom: 15px; margin-bottom: 25px; }}
                             .header-title h2 {{ color: #212529; font-size: 24px; margin: 0; font-weight: 800; }}
-                            
+
                             .input-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 25px; }}
                             .input-item label {{ display: block; font-size: 12px; font-weight: 600; color: #666; margin-bottom: 4px; }}
                             .input-item div {{ background-color: #f8f9fa; border: 1px solid #e9ecef; padding: 8px 10px; border-radius: 6px; font-size: 13px; font-weight: 600; color: #212529; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-                            
+
                             .kw-container {{ display: flex; justify-content: space-between; gap: 20px; margin-bottom: 25px; }}
                             .kw-box {{ flex: 1; align-self: flex-start; }}
                             .box-title {{ padding: 10px 12px; border-radius: 6px; font-size: 15px; font-weight: bold; margin-bottom: 10px; text-align: center; }}
                             .title-main {{ background-color: #e7f1ff; border: 1px solid #b6d4fe; color: #084298; }}
                             .title-detail {{ background-color: #f8f9fa; border: 1px solid #dee2e6; color: #212529; }}
                             ul {{ list-style: none; padding: 0; margin: 0; }}
-                            
+
                             .intro-section h3 {{ font-size: 18px; color: #212529; margin-bottom: 10px; font-weight: 800; }}
                             .intro-box {{ background-color: #f8f9fa; padding: 22px; border-radius: 8px; border: 1px solid #dee2e6; color: #212529; }}
-                            
+
                             .btn-down {{ margin-top: 20px; padding: 14px; background-color: #343a40; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: bold; width: 100%; max-width: 800px; text-align: center; transition: 0.2s; }}
                             .btn-down:hover {{ background-color: #212529; }}
                         </style>
@@ -306,7 +378,7 @@ with tab1:
                             <div class="header-title">
                                 <h2>위드멤버 플레이스 최적화 시스템</h2>
                             </div>
-                            
+
                             <div class="input-grid">
                                 <div class="input-item"><label>매장명</label><div>{store}</div></div>
                                 <div class="input-item"><label>지역</label><div>{reg}</div></div>
@@ -315,7 +387,7 @@ with tab1:
                                 <div class="input-item"><label>자랑거리</label><div>{display_merit}</div></div>
                                 <div class="input-item"><label>이벤트</label><div>{display_event}</div></div>
                             </div>
-                            
+
                             <div class="kw-container">
                                 <div class="kw-box">
                                     <div class="box-title title-main">{box_title_left}</div>
@@ -326,13 +398,13 @@ with tab1:
                                     <ul>{detail_li}</ul>
                                 </div>
                             </div>
-                            
+
                             <div class="intro-section">
                                 <h3>최적화 새소식 문구 (400자 내외)</h3>
                                 <div class="intro-box">{intro_html}</div>
                             </div>
                         </div>
-                        
+
                         <button class="btn-down" onclick="downloadImage()">리포트 화면 이미지로 다운로드</button>
 
                         <script>
@@ -350,38 +422,41 @@ with tab1:
                     </body>
                     </html>
                     """
-                    
+
                     components.html(html_content, height=1050, scrolling=True)
-                    
+
                     st.caption("텍스트 복사용 원본")
                     st.code(intro_res)
-                    
-                else: 
+
+                else:
                     st.error(f"오류가 발생했습니다: {msg}")
 
 with tab2:
     st.header("방문자 리뷰 답글 생성기")
     with st.form("review_form"):
-        review_content = st.text_area("손님이 남긴 리뷰 내용을 입력하세요", placeholder="예: 음식도 너무 맛있고 직원분들이 친절해서 기분 좋게 잘 먹고 갑니다!")
+        review_content = st.text_area(
+            "손님이 남긴 리뷰 내용을 입력하세요",
+            placeholder="예: 음식도 너무 맛있고 직원분들이 친절해서 기분 좋게 잘 먹고 갑니다!",
+            key="review_input_area",
+        )
         submit_review = st.form_submit_button("답글 생성")
-    
+
     if submit_review:
-        if not review_content:
-            st.warning("리뷰 내용을 입력해주세요!")
+        if not review_content or not review_content.strip():
+            st.session_state["review_warning"] = "리뷰 내용을 입력해주세요!"
+            st.session_state["review_reply"] = ""
         else:
-            with st.spinner("진짜 사장님의 감성으로 다정하고 자연스러운 답글을 작성 중..."):
-                
-                # [수정된 부분] AI가 기계적으로 느껴지던 원인을 제거하고, 사장님의 자연스러운 카톡 말투 유도
-                review_system_role = (
-                    "당신은 매장을 운영하는 실제 자영업 대표(사장님)입니다. "
-                    "손님이 남겨주신 리뷰를 한 글자 한 글자 진심으로 읽고, 친한 지인이나 단골손님에게 카카오톡 메시지를 보내듯 아주 자연스럽고 다정하게 대답합니다. "
-                    "기계적이거나 템플릿 같은 딱딱한 표현(~습니다, ~드립니다, ~합니다)은 절대 쓰지 마세요. "
-                    "구어체와 부드러운 연결사를 사용하여 사람이 직접 쓴 것 같은 온기 있는 글을 작성하세요."
-                )
-                
-                prompt = f"""
+            st.session_state["review_warning"] = ""
+            review_system_role = (
+                "당신은 매장을 운영하는 실제 자영업 대표(사장님)입니다. "
+                "손님이 남겨주신 리뷰를 한 글자 한 글자 진심으로 읽고, 친한 지인이나 단골손님에게 카카오톡 메시지를 보내듯 아주 자연스럽고 다정하게 대답합니다. "
+                "기계적이거나 템플릿 같은 딱딱한 표현(~습니다, ~드립니다, ~합니다)은 절대 쓰지 마세요. "
+                "구어체와 부드러운 연결사를 사용하여 사람이 직접 쓴 것 같은 온기 있는 글을 작성하세요."
+            )
+
+            prompt = f"""
 [손님이 남긴 리뷰 내용]
-"{review_content}"
+"{review_content.strip()}"
 
 [답글 작성 핵심 지침]
 1. **첫인사**: 딱딱한 형식 없이, "안녕하세요! 소중한 리뷰 남겨주셔서 정말 감사드려요~" 또는 이와 유사하게 밝고 친근한 인사로 자연스럽게 시작하세요.
@@ -389,15 +464,21 @@ with tab2:
 3. **자연스러운 마무리**: 다음에 방문할 때 알아봐 주겠다는 뉘앙스나, 날씨 인사, 건강을 챙겨주는 따뜻한 사장님의 안부로 기분 좋게 마무리하세요.
 4. **분량**: 공백 포함 **250자 ~ 350자 내외**로 너무 짧지 않고 풍성하게 작성하세요.
 5. **어투 엄수 (가장 중요)**: 
-   - 오직 **'~했어요', '~해주셔서 감사해요', '~될 것 같아요', '~놀러 오세요', '~보셔요'** 같은 다정하고 편안한 해요체만 사용하세요.
-   - 절대 '감사드립니다', '기쁘게 생각합니다', '노력하겠습니다' 같은 AI스러운 비즈니스 투어투를 쓰지 마세요.
+  - 오직 **'~했어요', '~해주셔서 감사해요', '~될 것 같아요', '~놀러 오세요', '~보셔요'** 같은 다정하고 편안한 해요체만 사용하세요.
+  - 절대 '감사드립니다', '기쁘게 생각합니다', '노력하겠습니다' 같은 AI스러운 비즈니스 투어투를 쓰지 마세요.
 6. **이모티콘**: 문맥에 어울리는 이모티콘(😊, ✨, ㅎㅎ, 🙌 등)을 2~3개 정도 적절히 섞어 사람의 온기가 느껴지도록 하세요.
 7. 해시태그(#)나 키워드 나열은 절대 금지하며, 오직 답글 본문만 출력하세요.
 """
-                
-                # 온도를 약간 높여(0.9) 기계적인 반복을 줄이고 인간다운 표현력 극대화
-                review_res = generate_ai_content(prompt, O_API_KEY, system_role=review_system_role, temp=0.9)
-                
-                st.success("작성된 답글:")
-                st.write(review_res)
-                st.code(review_res)
+            with st.spinner("진짜 사장님의 감성으로 다정하고 자연스러운 답글을 작성 중..."):
+                st.session_state["review_reply"] = generate_ai_content(
+                    prompt, O_API_KEY, system_role=review_system_role, temp=0.9
+                )
+
+    review_output_box = st.container()
+    with review_output_box:
+        if st.session_state["review_warning"]:
+            st.warning(st.session_state["review_warning"])
+        elif st.session_state["review_reply"]:
+            st.success("작성된 답글:")
+            st.write(st.session_state["review_reply"])
+            st.code(st.session_state["review_reply"], key="review_reply_code")
