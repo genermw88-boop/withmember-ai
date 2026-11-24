@@ -426,7 +426,7 @@ with tab1:
                     components.html(html_content, height=1050, scrolling=True)
 
                     st.caption("텍스트 복사용 원본")
-                    st.code(intro_res)
+                    st.code(str(intro_res))
 
                 else:
                     st.error(f"오류가 발생했습니다: {msg}")
@@ -479,6 +479,7 @@ with tab2:
         if st.session_state["review_warning"]:
             st.warning(st.session_state["review_warning"])
         elif st.session_state["review_reply"]:
+            reply_text = str(st.session_state["review_reply"])
             st.success("작성된 답글:")
-            st.write(st.session_state["review_reply"])
-            st.code(st.session_state["review_reply"], key="review_reply_code")
+            st.write(reply_text)
+            st.code(reply_text)
