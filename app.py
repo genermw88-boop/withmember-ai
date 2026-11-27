@@ -61,6 +61,7 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
     loc_city = reg_parts[-2] if len(reg_parts) > 1 else loc_dong
 
     men_raw = men.strip() if men and men.strip() else "추천"
+    # 쉼표로 구분된 개별 메뉴/업종 리스트 (합친 문자열은 키워드 생성에 사용하지 않음)
     men_list = [m.strip() for m in men_raw.split(",") if m.strip()]
     if not men_list:
         men_list = ["추천"]
@@ -69,57 +70,66 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
 
     food_keywords = [
         "맛집", "음식점", "식당", "술집", "주점", "카페", "베이커리",
-        "디저트", "고기", "횟집", "치킨", "피자", "중식", "한식", "일식", "양식", "안주",
+        "디저트", "고기", "횟집", "치킨", "피자", "중식", "한식", "일식", "양식", "안주", "갈비",
     ]
-    is_food = any(fk in men_raw for m in men_list for fk in food_keywords)
+    is_food = any(fk in m for m in men_list for fk in food_keywords)
 
-    # 1) 대표(메인) 키워드 5개 생성 (입력한 메뉴/업종 전체 반영)
+    # 1) 대표(메인) 키워드 5개 생성 (개별 메뉴/업종 각각 분리 조합)
     if has_target:
         raw_list = [k.strip() for k in target_kw_str.split(",") if k.strip()]
         main_list = list(dict.fromkeys(raw_list))
     else:
         main_list = []
-        if is_food:
-            main_list.append(f"{loc_dong} 맛집")
         for m_item in men_list:
             main_list.append(f"{loc_dong} {m_item}")
+        for m_item in men_list:
             if len(main_list) < 5:
                 main_list.append(f"{loc_city} {m_item}")
 
-        fallback_mains = (
+        extra_mains = (
             [
+                f"{loc_dong} 맛집",
                 f"{loc_city} 맛집",
                 f"{loc_dong} 가볼만한곳",
                 f"{loc_dong} 핫플",
-                f"{loc_dong} {men_raw}",
             ]
             if is_food
             else [
-                f"{loc_dong} {men_raw}",
                 f"{loc_dong} 가볼만한곳",
-                f"{loc_city} {men_raw}",
-                f"{loc_dong} {men_list[0]} 추천",
+                f"{loc_city} 가볼만한곳",
+                f"{loc_dong} 핫플",
+                f"{loc_city} {men_list[0]} 추천",
             ]
         )
-        for fb in fallback_mains:
-            if fb not in main_list:
-                main_list.append(fb)
+        for em in extra_mains:
+            if em not in main_list:
+                main_list.append(em)
 
         main_list = list(dict.fromkeys(main_list))
 
+    idx = 0
     while len(main_list) < 5:
-        main_list.append(f"{loc_dong} {men_raw} 전문")
+        m_cur = men_list[idx % len(men_list)]
+        cand = f"{loc_dong} {m_cur} 맛집" if is_food else f"{loc_dong} {m_cur} 추천"
+        if cand not in main_list:
+            main_list.append(cand)
+        else:
+            main_list.append(f"{loc_city} {m_cur} 추천")
+        idx += 1
     main_list = main_list[:5]
 
-    # 2) 추천 연관 상세 키워드 5개 생성 풀 (입력한 메뉴/업종 전체 반영)
+    # 2) 추천 연관 상세 키워드 5개 생성 풀 (개별 메뉴/업종별 다양한 수식어 조합)
     detail_pool = []
-    for m_item in men_list:
-        if is_food:
-            detail_pool.append(f"{loc_city} {m_item}")
-            detail_pool.append(f"{loc_dong} {m_item} 맛집")
-        else:
-            detail_pool.append(f"{loc_city} {m_item} 잘하는곳")
-            detail_pool.append(f"{loc_dong} {m_item} 추천")
+    suffixes = (
+        ["맛집", "추천", "잘하는곳", "회식장소", "데이트"]
+        if is_food
+        else ["추천", "잘하는곳", "전문점", "예약", "인기"]
+    )
+
+    for sfx in suffixes:
+        for m_item in men_list:
+            detail_pool.append(f"{loc_dong} {m_item} {sfx}")
+            detail_pool.append(f"{loc_city} {m_item} {sfx}")
 
     if is_food:
         detail_pool.extend([
@@ -134,7 +144,6 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
             f"{loc_dong} 예약",
             f"{loc_dong} 전문점",
             f"{loc_city} 핫플",
-            f"{loc_dong} 인기 {men_raw}",
             f"{loc_city} 추천",
         ])
 
@@ -297,7 +306,7 @@ with tab1:
 
                     used_targets = ", ".join([k["relKeyword"] for k in g_kws])
                     men_guide_text = (
-                        f"입력된 메뉴/업종 전체({men_clean}) — 특히 {', '.join(men_items)} 항목을 임의로 하나만 고르지 말고 모두 본문에 자연스럽게 포함하세요."
+                        f"개별 메뉴/업종({', '.join(men_items)})을 쉼표로 이어 붙인 형태가 아니라 각각 분리된 자연스러운 문장 속 표현으로 모두 녹여내세요."
                         if len(men_items) > 1
                         else f"입력된 메뉴/업종({men_clean})을 그대로 자연스럽게 반영하세요."
                     )
@@ -310,7 +319,7 @@ with tab1:
 [매장 정보]
 - 매장명: '{store}'
 - 지역: '{reg}'
-- 메뉴/업종(입력 원문): '{men_clean}'
+- 개별 메뉴/업종 목록: {', '.join(men_items)}
 - 매장 자랑거리: '{merit if has_merit else "입력 없음 (대표로서 정성스러운 서비스와 편안한 분위기를 자연스럽게 소개)"}'
 - 진행 이벤트: '{event if has_event else "입력 없음 (이벤트 언급 절대 금지)"}'
 
