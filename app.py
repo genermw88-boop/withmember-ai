@@ -60,60 +60,85 @@ def get_naver_target_keywords(target_kw_str, store, reg, men, c_id, a_key, s_key
     loc_dong = reg_parts[-1] if reg_parts else reg
     loc_city = reg_parts[-2] if len(reg_parts) > 1 else loc_dong
 
-    core_men = men.split(",")[0].strip() if men else "추천"
+    men_raw = men.strip() if men and men.strip() else "추천"
+    men_list = [m.strip() for m in men_raw.split(",") if m.strip()]
+    if not men_list:
+        men_list = ["추천"]
+
     has_target = bool(target_kw_str and target_kw_str.strip())
 
     food_keywords = [
         "맛집", "음식점", "식당", "술집", "주점", "카페", "베이커리",
         "디저트", "고기", "횟집", "치킨", "피자", "중식", "한식", "일식", "양식", "안주",
     ]
-    is_food = any(fk in men for fk in food_keywords)
+    is_food = any(fk in men_raw for m in men_list for fk in food_keywords)
 
-    # 1) 대표(메인) 키워드 5개 강제 생성
+    # 1) 대표(메인) 키워드 5개 생성 (입력한 메뉴/업종 전체 반영)
     if has_target:
         raw_list = [k.strip() for k in target_kw_str.split(",") if k.strip()]
         main_list = list(dict.fromkeys(raw_list))
     else:
+        main_list = []
         if is_food:
-            main_list = [
-                f"{loc_dong} 맛집",
-                f"{loc_dong} {core_men}",
+            main_list.append(f"{loc_dong} 맛집")
+        for m_item in men_list:
+            main_list.append(f"{loc_dong} {m_item}")
+            if len(main_list) < 5:
+                main_list.append(f"{loc_city} {m_item}")
+
+        fallback_mains = (
+            [
                 f"{loc_city} 맛집",
                 f"{loc_dong} 가볼만한곳",
                 f"{loc_dong} 핫플",
+                f"{loc_dong} {men_raw}",
             ]
-        else:
-            main_list = [
-                f"{loc_dong} {core_men}",
-                f"{loc_city} {core_men}",
-                f"{loc_dong} {core_men} 추천",
+            if is_food
+            else [
+                f"{loc_dong} {men_raw}",
                 f"{loc_dong} 가볼만한곳",
-                f"{loc_city} {core_men} 추천",
+                f"{loc_city} {men_raw}",
+                f"{loc_dong} {men_list[0]} 추천",
             ]
+        )
+        for fb in fallback_mains:
+            if fb not in main_list:
+                main_list.append(fb)
+
+        main_list = list(dict.fromkeys(main_list))
 
     while len(main_list) < 5:
-        main_list.append(f"{loc_dong} {core_men} 전문")
+        main_list.append(f"{loc_dong} {men_raw} 전문")
     main_list = main_list[:5]
 
-    # 2) 추천 연관 상세 키워드 5개 강제 생성 풀
+    # 2) 추천 연관 상세 키워드 5개 생성 풀 (입력한 메뉴/업종 전체 반영)
+    detail_pool = []
+    for m_item in men_list:
+        if is_food:
+            detail_pool.append(f"{loc_city} {m_item}")
+            detail_pool.append(f"{loc_dong} {m_item} 맛집")
+        else:
+            detail_pool.append(f"{loc_city} {m_item} 잘하는곳")
+            detail_pool.append(f"{loc_dong} {m_item} 추천")
+
     if is_food:
-        detail_pool = [
-            f"{loc_city} {core_men}",
+        detail_pool.extend([
             f"{loc_dong} 회식장소",
             f"{loc_dong} 모임장소",
             f"{loc_dong} 데이트코스",
             f"{loc_city} 가볼만한곳",
             f"{loc_dong} 술집",
-        ]
+        ])
     else:
-        detail_pool = [
-            f"{loc_city} {core_men} 잘하는곳",
+        detail_pool.extend([
             f"{loc_dong} 예약",
             f"{loc_dong} 전문점",
             f"{loc_city} 핫플",
-            f"{loc_dong} 인기{core_men}",
+            f"{loc_dong} 인기 {men_raw}",
             f"{loc_city} 추천",
-        ]
+        ])
+
+    detail_pool = list(dict.fromkeys(detail_pool))
 
     hint_kws_param = ",".join([k.replace(" ", "") for k in main_list + detail_pool[:3]])
     params = {"hintKeywords": hint_kws_param, "showDetail": 1}
@@ -259,8 +284,11 @@ with tab1:
             st.error("매장명, 지역, 메뉴/업종은 필수 입력 항목입니다!")
         else:
             with st.spinner("지역 기반 정확도 높은 키워드 검색 및 문구 작성 중..."):
+                men_clean = men.strip()
+                men_items = [m.strip() for m in men_clean.split(",") if m.strip()]
+
                 g_kws, d_kws, msg = get_naver_target_keywords(
-                    target_kws, store, reg, men, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY
+                    target_kws, store, reg, men_clean, N_CUSTOMER_ID, N_API_KEY, N_SECRET_KEY
                 )
 
                 if msg == "success":
@@ -268,6 +296,11 @@ with tab1:
                     has_merit = bool(merit and merit.strip())
 
                     used_targets = ", ".join([k["relKeyword"] for k in g_kws])
+                    men_guide_text = (
+                        f"입력된 메뉴/업종 전체({men_clean}) — 특히 {', '.join(men_items)} 항목을 임의로 하나만 고르지 말고 모두 본문에 자연스럽게 포함하세요."
+                        if len(men_items) > 1
+                        else f"입력된 메뉴/업종({men_clean})을 그대로 자연스럽게 반영하세요."
+                    )
 
                     system_role = f"""당신은 '{store}'을 직접 운영하는 다정하고 친근한 매장 대표(사장님)입니다.
 손님들에게 대표가 직접 소통하듯 따뜻하고 진정성 있는 톤으로 작성하세요.
@@ -277,15 +310,16 @@ with tab1:
 [매장 정보]
 - 매장명: '{store}'
 - 지역: '{reg}'
-- 메뉴/업종: '{men}'
+- 메뉴/업종(입력 원문): '{men_clean}'
 - 매장 자랑거리: '{merit if has_merit else "입력 없음 (대표로서 정성스러운 서비스와 편안한 분위기를 자연스럽게 소개)"}'
 - 진행 이벤트: '{event if has_event else "입력 없음 (이벤트 언급 절대 금지)"}'
 
 [SEO 및 문구 반영 조건]
-1. 타겟 키워드([{used_targets}]) 중 1~2개를 본문에 자연스럽게 포함시키세요.
-2. 매장을 소개할 때 '이곳', '저희 매장' 같은 모호한 대명사 대신 **반드시 "저희 {store}"** 형태로 자연스럽게 직접 언급하며 소개하세요. (예: "저희 {store}에서는~", "저희 {store}를 찾아주시는~")
-3. 매장 자랑거리가 '입력 없음'인 경우, 자랑거리를 강제로 지어내지 말고 대표로서 손님 한 분 한 분께 정성을 다하겠다는 부드럽고 따뜻한 소개 중심으로 작성하세요.
-4. 진행 이벤트가 '입력 없음'인 경우, **절대로 이벤트나 할인 등에 대한 내용을 문구에 포함하거나 지어내지 마세요.**
+1. {men_guide_text}
+2. 타겟 키워드([{used_targets}]) 중 1~2개를 본문에 자연스럽게 포함시키세요.
+3. 매장을 소개할 때 '이곳', '저희 매장' 같은 모호한 대명사 대신 **반드시 "저희 {store}"** 형태로 자연스럽게 직접 언급하며 소개하세요. (예: "저희 {store}에서는~", "저희 {store}를 찾아주시는~")
+4. 매장 자랑거리가 '입력 없음'인 경우, 자랑거리를 강제로 지어내지 말고 대표로서 손님 한 분 한 분께 정성을 다하겠다는 부드럽고 따뜻한 소개 중심으로 작성하세요.
+5. 진행 이벤트가 '입력 없음'인 경우, **절대로 이벤트나 할인 등에 대한 내용을 문구에 포함하거나 지어내지 마세요.**
 
 [작성 가이드라인]
 1. [제목]과 [본문] 형식으로 출력하세요.
@@ -382,7 +416,7 @@ with tab1:
                             <div class="input-grid">
                                 <div class="input-item"><label>매장명</label><div>{store}</div></div>
                                 <div class="input-item"><label>지역</label><div>{reg}</div></div>
-                                <div class="input-item"><label>메뉴/업종</label><div>{men}</div></div>
+                                <div class="input-item"><label>메뉴/업종</label><div>{men_clean}</div></div>
                                 <div class="input-item"><label>타겟 키워드</label><div>{display_target}</div></div>
                                 <div class="input-item"><label>자랑거리</label><div>{display_merit}</div></div>
                                 <div class="input-item"><label>이벤트</label><div>{display_event}</div></div>
